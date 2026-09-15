@@ -19,7 +19,7 @@ A change is DONE when:
 | `server/agent.ts` | the loop's own event stream | every frame type in order; `done` once, last; cap and errors loud | `npm test` |
 | `server/mcp.ts` | a real MCP server over stdio | `/api/health` up, `/api/tools` lists `<server>__<tool>` names | runtime smoke (§4) |
 | `server/providers/*` | the real provider wire | one live turn calls a tool and answers | live loop (§4) |
-| `web/` | a browser against the runtime | tool cards show status; error card says it is not an answer | `vite build` + eyes |
+| `web/` | a browser against the runtime | tool cards show status; error card says it is not an answer | `vite build` + eyes — **rendered and driven 2026-09-15: two turns, three green cards, answers grounded** (the failed-card state is asserted in the loop tests, not yet provoked on screen) |
 | this suite | a change | mutation probe: remove a rule, its test goes red | §3 |
 
 ## §3 Invariants

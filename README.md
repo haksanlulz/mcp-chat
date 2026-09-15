@@ -63,6 +63,7 @@ Each has a test in `test/agent.test.ts`, and each test was shown to fail when th
 - `npm test` — 12/12; `npm run typecheck` clean; `vite build` 228 KB JS.
 - Runtime over a real server (`mcp-scryfall` via `tsx` over stdio): `/api/health` up with 7 tools, `/api/tools` lists them qualified, malformed `POST /api/chat` → 400.
 - **Full loop, local model:** `qwen3-coder:30b` was asked for Lightning Bolt's text and cost. It called `cards__card_named {"name":"Lightning Bolt"}`, the server answered, and the model wrote one sentence quoting the real Oracle text and `{R}` — 2 iterations, `stoppedBy: answer`, 27 tokens.
+- **In the browser, two turns:** asked about Lightning Bolt and a misspelled "Lightning Bolp" — the model called `card_named` for the first and chose `card_fuzzy` for the typo, both cards rendered green with server › tool and the arguments, and the answer quoted `{R}` / 3 damage and called the second a typo. A follow-up ("mana cost of Counterspell") called `card_named` again and answered `{U}{U}`. Enter-to-send verified with a dispatched `keydown` (the harness's synthetic Return key did not reach React; a real keyboard does).
 
 ## Not yet
 
