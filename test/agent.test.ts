@@ -1,0 +1,140 @@
+import { describe, expect, it } from "vitest";
+import { runAgent, validateArgs, type AgentEvent, type Message, type Model, type ModelEvent, type ToolSpec } from "../server/agent";
+
+const LOOKUP: ToolSpec = {
+  name: "civic__building_violations",
+  description: "HPD violations for one address",
+  inputSchema: {
+    type: "object",
+    properties: { house_number: { type: "string" }, street: { type: "string" }, limit: { type: "integer" } },
+    required: ["house_number", "street"],
+    additionalProperties: false,
+  },
+};
+
+/** A scripted model: each turn yields the next script entry. */
+function scripted(turns: ModelEvent[][]): Model & { turnsTaken: number; lastMessages: Message[] } {
+  const m = {
+    turnsTaken: 0,
+    lastMessages: [] as Message[],
+    async *turn(messages: Message[]): AsyncIterable<ModelEvent> {
+      m.lastMessages = messages;
+      const script = turns[m.turnsTaken++] ?? [{ type: "end" as const }];
+      for (const ev of script) yield ev;
+    },
+  };
+  return m;
+}
+
+function collect() {
+  const events: AgentEvent[] = [];
+  return { events, emit: (e: AgentEvent) => events.push(e) };
+}
+
+describe("validateArgs runs before any call", () => {
+  it("names a missing required argument", () => {
+    expect(validateArgs(LOOKUP, { street: "Sedgwick Avenue" })).toMatch(/missing required argument "house_number"/);
+  });
+  it("rejects an unknown key with a near-miss", () => {
+    expect(validateArgs(LOOKUP, { house_number: "1", street: "X", limt: 5 })).toMatch(/"limt" \(did you mean "limit"\?\)/);
+  });
+  it("rejects a wrong type", () => {
+    expect(validateArgs(LOOKUP, { house_number: 1520, street: "X" })).toMatch(/"house_number" must be string, got integer/);
+  });
+  it("passes a well-formed call", () => {
+    expect(validateArgs(LOOKUP, { house_number: "1520", street: "Sedgwick Avenue", limit: 3 })).toBeNull();
+  });
+});
+
+describe("runAgent", () => {
+  it("streams tokens, then done(answer), exactly one done, last", async () => {
+    const model = scripted([[{ type: "token", text: "Hel" }, { type: "token", text: "lo" }, { type: "end" }]]);
+    const { events, emit } = collect();
+    await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "hi" }], callTool: async () => ({ content: "", isError: false }), emit });
+    expect(events.map((e) => e.type)).toEqual(["token", "token", "done"]);
+    expect(events.at(-1)).toEqual({ type: "done", iterations: 1, stoppedBy: "answer" });
+  });
+
+  it("executes a valid tool call and feeds the result back as a tool message", async () => {
+    const call = { id: "c1", name: LOOKUP.name, args: { house_number: "1520", street: "Sedgwick Avenue" } };
+    const model = scripted([
+      [{ type: "tool_call", call }, { type: "end" }],
+      [{ type: "token", text: "128 open." }, { type: "end" }],
+    ]);
+    const seen: unknown[] = [];
+    const { events, emit } = collect();
+    await runAgent({
+      model, tools: [LOOKUP], messages: [{ role: "user", content: "violations?" }], emit,
+      callTool: async (c) => { seen.push(c.args); return { content: '{"total":128}', isError: false }; },
+    });
+    expect(seen).toEqual([call.args]);
+    expect(events.map((e) => e.type)).toEqual(["tool_call", "tool_result", "token", "done"]);
+    const toolMsg = model.lastMessages.find((m) => m.role === "tool");
+    expect(toolMsg).toMatchObject({ toolCallId: "c1", isError: false, content: '{"total":128}' });
+  });
+
+  it("RED LEG: a misspelled argument never reaches the tool; it comes back as an error the model can read", async () => {
+    const bad = { id: "c2", name: LOOKUP.name, args: { house_number: "1520", street: "X", limt: 5 } };
+    const model = scripted([
+      [{ type: "tool_call", call: bad }, { type: "end" }],
+      [{ type: "token", text: "Sorry, let me fix that." }, { type: "end" }],
+    ]);
+    let called = 0;
+    const { events, emit } = collect();
+    await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "x" }], emit, callTool: async () => { called++; return { content: "", isError: false }; } });
+    expect(called).toBe(0);
+    const result = events.find((e) => e.type === "tool_result");
+    expect(result).toMatchObject({ isError: true });
+    expect((result as { content: string }).content).toMatch(/did you mean "limit"/);
+    expect(events.some((e) => e.type === "error" && "callId" in e && e.callId === "c2")).toBe(true);
+    const toolMsg = model.lastMessages.find((m) => m.role === "tool");
+    expect(toolMsg).toMatchObject({ isError: true });
+  });
+
+  it("RED LEG: a tool that returns isError is surfaced as an error frame, never rendered as a plain answer", async () => {
+    const call = { id: "c3", name: LOOKUP.name, args: { house_number: "1520", street: "X" } };
+    const model = scripted([[{ type: "tool_call", call }, { type: "end" }], [{ type: "end" }]]);
+    const { events, emit } = collect();
+    await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "x" }], emit, callTool: async () => ({ content: "HPD upstream 503", isError: true }) });
+    expect(events.filter((e) => e.type === "error").map((e) => (e as { message: string }).message)).toEqual(["HPD upstream 503"]);
+    expect(events.filter((e) => e.type === "token")).toHaveLength(0);
+  });
+
+  it("RED LEG: a thrown tool becomes an isError result, not a crash", async () => {
+    const call = { id: "c4", name: LOOKUP.name, args: { house_number: "1", street: "X" } };
+    const model = scripted([[{ type: "tool_call", call }, { type: "end" }], [{ type: "token", text: "ok" }, { type: "end" }]]);
+    const { events, emit } = collect();
+    await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "x" }], emit, callTool: async () => { throw new Error("spawn failed"); } });
+    expect(events.find((e) => e.type === "tool_result")).toMatchObject({ isError: true, content: expect.stringContaining("spawn failed") });
+    expect(events.at(-1)).toMatchObject({ type: "done", stoppedBy: "answer" });
+  });
+
+  it("RED LEG: the iteration cap fires as an error + done(cap), never a silent truncation", async () => {
+    const call = { id: "loop", name: LOOKUP.name, args: { house_number: "1", street: "X" } };
+    const forever = scripted(Array.from({ length: 50 }, () => [{ type: "tool_call" as const, call }, { type: "end" as const }]));
+    const { events, emit } = collect();
+    await runAgent({ model: forever, tools: [LOOKUP], messages: [{ role: "user", content: "x" }], emit, maxIterations: 3, callTool: async () => ({ content: "{}", isError: false }) });
+    expect(forever.turnsTaken).toBe(3);
+    expect(events.at(-2)).toMatchObject({ type: "error", message: expect.stringContaining("stopped after 3") });
+    expect(events.at(-1)).toEqual({ type: "done", iterations: 3, stoppedBy: "cap" });
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+  });
+
+  it("RED LEG: an unknown tool name is refused before any call", async () => {
+    const call = { id: "c5", name: "nope__tool", args: {} };
+    const model = scripted([[{ type: "tool_call", call }, { type: "end" }], [{ type: "end" }]]);
+    let called = 0;
+    const { events, emit } = collect();
+    await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "x" }], emit, callTool: async () => { called++; return { content: "", isError: false }; } });
+    expect(called).toBe(0);
+    expect(events.find((e) => e.type === "tool_result")).toMatchObject({ isError: true, content: expect.stringContaining('unknown tool "nope__tool"') });
+  });
+
+  it("a model that throws mid-turn ends with error + done(error)", async () => {
+    const model: Model = { async *turn() { yield { type: "token", text: "par" }; throw new Error("connection reset"); } };
+    const { events, emit } = collect();
+    await runAgent({ model, tools: [], messages: [{ role: "user", content: "x" }], emit, callTool: async () => ({ content: "", isError: false }) });
+    expect(events.map((e) => e.type)).toEqual(["token", "error", "done"]);
+    expect(events.at(-1)).toMatchObject({ stoppedBy: "error" });
+  });
+});

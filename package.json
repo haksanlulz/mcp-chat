@@ -1,0 +1,32 @@
+{
+  "name": "@haksanlulz/mcp-chat",
+  "version": "0.1.0",
+  "description": "Local-first chat UI for MCP servers: a TypeScript agent runtime that spawns MCP servers over stdio, runs the tool loop against a local (Ollama) or hosted (Anthropic) model, and streams tokens and tool calls to a React front end.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": { "name": "Abishai James" },
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite",
+    "build:web": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.6.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.0"
+  }
+}

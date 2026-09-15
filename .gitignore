@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.log
+.env
+# the local server registry names machine paths; commit the example only
+mcp-chat.config.json
