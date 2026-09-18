@@ -112,7 +112,7 @@ export function useChat() {
   return { turns, busy, send, stop, reset };
 }
 
-async function* sse(body: ReadableStream<Uint8Array>): AsyncIterable<unknown> {
+export async function* sse(body: ReadableStream<Uint8Array>): AsyncIterable<unknown> {
   const reader = body.getReader();
   const dec = new TextDecoder();
   let buf = "";

@@ -19,7 +19,7 @@ A change is DONE when:
 | `server/agent.ts` | the loop's own event stream | every frame type in order; `done` once, last; cap and errors loud | `npm test` |
 | `server/mcp.ts` | a real MCP server over stdio | `/api/health` up, `/api/tools` lists `<server>__<tool>` names | runtime smoke (§4) |
 | `server/providers/*` | the real provider wire | one live turn calls a tool and answers | live loop (§4) |
-| `web/` | a browser against the runtime | tool cards show status; error card says it is not an answer | `vite build` + eyes — **rendered and driven 2026-09-15: two turns, three green cards, answers grounded** (the failed-card state is asserted in the loop tests, not yet provoked on screen) |
+| `web/` | static render (`react-dom/server`) + a browser against the runtime | tool cards show status; error card says it is not an answer; nothing but streamed tokens reads as answer text | `test/web.test.tsx` (9 tests, 4 RED LEG probed 2026-09-18) · `node tools/screenshot.mjs` drives headless Chrome over CDP against the live runtime and writes `docs/screenshot.png` from a real turn — **2026-09-18: two servers, three green cards, grounded answers** (the failed-card state is asserted in the static tests, not yet provoked on screen) |
 | this suite | a change | mutation probe: remove a rule, its test goes red | §3 |
 
 ## §3 Invariants
@@ -30,6 +30,8 @@ A change is DONE when:
 | I2 | An `isError` result is never rendered as a token | "isError is surfaced as an error frame" — red when the error frame is dropped (probed 2026-09-15) |
 | I3 | The iteration cap emits an error, never a silent stop | "iteration cap fires" — red when the error emit is removed (probed 2026-09-15) |
 | I4 | `done` exactly once, last | asserted in every loop test |
+| I5 | A tool result never renders as answer text; a failed call is a failed card | `test/web.test.tsx` "an assistant turn whose only tool call failed carries no answer text" — red when the card is replaced by a text div; "a failed call renders as an error card" — red when the alert is removed (both probed 2026-09-18) |
+| I6 | A frame split across SSE chunks is one frame | "a frame split across two chunks is one frame" — red when the decoder drops the carry-over (probed 2026-09-18) |
 
 ⚠️ **The first mutation-probe run reported all three "STAYED GREEN" — the probe was wrong, not the tests.** Its regex read vitest's summary line through ANSI colour codes and never matched `Tests N failed`. Re-run with the codes stripped: all three red. Rule 23 — a verifier's mass result is a claim about the verifier first.
 
@@ -40,14 +42,14 @@ A change is DONE when:
 | loop / validation (`server/agent.ts`) | `npm test` + re-run the three mutation probes (README § Rules) |
 | MCP manager / providers | `npm test` + `npm run typecheck` + runtime smoke: start with a real server, `curl /api/health`, `curl /api/tools` |
 | provider wire changes | + one live turn (`POST /api/chat`) against the real provider, frames read |
-| web | `vite build` + open it against the runtime and click one failed tool card |
+| web | `npm test` (the four web RED LEGs) + `node tools/screenshot.mjs` against the live runtime; open it and click one failed tool card |
 | docs only | none |
 
 **Runtime smoke, verbatim** (needs a local MCP server checkout; adjust the path):
 
 ```
 cat > mcp-chat.config.json <<'EOF'
-{ "servers": [ { "name": "cards", "command": "npx", "args": ["tsx", "F:/claude/tools/mcp-scryfall/index.ts"], "cwd": "F:/claude/tools/mcp-scryfall" } ] }
+{ "servers": [ { "name": "cards", "command": "npx", "args": ["tsx", "/path/to/mcp-scryfall/index.ts"], "cwd": "/path/to/mcp-scryfall" } ] }
 EOF
 npx tsx server/index.ts &   # then:
 curl -s http://127.0.0.1:8731/api/health
@@ -80,3 +82,4 @@ Check: test/agent.test.ts "RED LEG: a tool that returns isError…", "…thrown 
 ## §6 Escape log
 
 - 2026-09-15 — none yet in the artifact. Two instrument escapes during the build, both recorded above: the ANSI-blind mutation probe, and the orphan sweep that matched `tsx`.
+- 2026-09-18 — none in the artifact. Two more instrument escapes: the web mutation probe's first run crashed on a cp1252 decode of vitest's output before any verdict, and its `write_text` restore rewrote a file's line endings (fixed with `newline=""`; `git status` is the check). And `tools/screenshot.mjs` first targeted `127.0.0.1:5173` while vite binds `localhost`, which resolves to `::1` here — the page was a connection-refused error and the script correctly refused to shoot it.
