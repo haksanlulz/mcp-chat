@@ -51,21 +51,40 @@ Each server's tools are exposed to the model as `<name>__<tool>`, so two servers
 
 Frames, in order: `token` · `tool_call` · `tool_result` (with `isError`) · `error` · `done` (`stoppedBy: answer | cap | error`). `done` is emitted exactly once, last.
 
+## Testing
+
+```
+npm test          # 42 tests, offline
+npm run typecheck
+npm run smoke     # starts the real runtime against a fixture MCP server, hits every route, stops it by PID
+```
+
+| file | what it pins | channel |
+|---|---|---|
+| `test/agent.test.ts` | the loop's rules below | scripted model, in-process |
+| `test/providers.test.ts` | Ollama NDJSON + Anthropic SSE parsing, transcript mapping, error frames, non-2xx | `fetch` stubbed with chunked streams |
+| `test/mcp.test.ts` | server start/fail isolation, qualified names, `isError` pass-through | a **real MCP server over stdio** (`test/fixtures/echo-server.ts`) |
+| `test/api.test.ts` | `/api/chat` body: roles, caps, extra keys | pure |
+| `test/web.test.tsx` | error card, cap note, no result-as-text, SSE reassembly, bold | `react-dom/server`, no browser |
+
+Every RED LEG test was shown to fail when its rule was removed before it was trusted (mutation-probed 2026-09-15, 09-18, 09-19). CI runs all of it on Node 20 and 22.
+
 ## Rules the loop enforces
 
-Each has a test in `test/agent.test.ts`, and each test was shown to fail when the rule was removed (mutation-probed 2026-09-15) before it was trusted. The UI's own rules live in `test/web.test.tsx`, rendered with `react-dom/server` so they need no browser, and were probed the same way (2026-09-18): the error card removed, the cap note removed, a tool result leaked into answer text, and the SSE chunk boundary dropped — each turned its test red.
+Each has a test in `test/agent.test.ts`. The UI's own rules live in `test/web.test.tsx`; the providers' in `test/providers.test.ts`; the manager's in `test/mcp.test.ts`.
 
 1. **Arguments are validated against the tool's `inputSchema` before any call** — missing required key, unknown key (with a near-miss suggestion), wrong type. The MCP SDK's low-level `Server` does not validate `inputSchema` on the far side, so a misspelled key would otherwise be dropped silently. A bad call becomes an `isError` result the model can read; the tool is never invoked.
 2. **A tool error is surfaced as an error frame and fed back; it never becomes text.** The UI renders it as a failed card with "this is not an answer". A thrown tool becomes an `isError` result, not a crash.
 3. **The iteration cap is loud.** Hitting it emits an `error` frame and `done(cap)`; nothing is truncated quietly.
 4. **Unknown tool names are refused before any call.**
-5. **A failed call is a failed card, never answer text** (`web/`). The transcript keeps tool results inside cards; the only text a reader sees as the answer is what the model streamed as tokens. `**bold**` is the one piece of markdown rendered, as `<b>`; nothing else the model emits becomes markup.
+5. **The client sends user and assistant turns only.** `POST /api/chat` refuses `tool` and `system` roles, non-string content, a transcript that does not end on the user, more than 200 messages or 32K characters per message. Tool results exist only inside one request, built by the loop — a client cannot forge one.
+6. **A failed call is a failed card, never answer text** (`web/`). The transcript keeps tool results inside cards; the only text a reader sees as the answer is what the model streamed as tokens. `**bold**` is the one piece of markdown rendered, as `<b>`; nothing else the model emits becomes markup.
 
 ## Measured
 
 2026-09-15, this machine (AMD 7900 XTX, Ollama on ROCm):
 
-- `npm test` — 12/12; `npm run typecheck` clean; `vite build` 228 KB JS.
+- `npm test` — 12/12 on 09-15, 42/42 on 09-19; `npm run typecheck` clean; `vite build` 228 KB JS.
 - Runtime over a real server (`mcp-scryfall` via `tsx` over stdio): `/api/health` up with 7 tools, `/api/tools` lists them qualified, malformed `POST /api/chat` → 400.
 - **Full loop, local model:** `qwen3-coder:30b` was asked for Lightning Bolt's text and cost. It called `cards__card_named {"name":"Lightning Bolt"}`, the server answered, and the model wrote one sentence quoting the real Oracle text and `{R}` — 2 iterations, `stoppedBy: answer`, 27 tokens.
 - **2026-09-18, screenshot above:** `npm test` 21/21 (12 loop + 9 web), typecheck clean. Two servers up (`housing` 10 tools, `cards` 7). Asked for 1520 Sedgwick Avenue's open HPD violations and registered owner: the model called `building_violations` then `who_owns`, both with the borough it inferred from the question, and answered 123 open with the registered owner and managing agent — figures that are the server's, not the model's. An earlier take of the same question broke the count down by class (16 A / 35 B / 72 C); the answer varies, the numbers do not.
@@ -75,5 +94,4 @@ Each has a test in `test/agent.test.ts`, and each test was shown to fail when th
 
 - Tool history is not round-tripped across requests; each `POST /api/chat` sends the human-readable transcript only.
 - No auth, no TLS, no remote MCP transports — local tool, local model, local servers.
-- No tests for the providers' wire parsing beyond the live run above.
 - No markdown beyond `**bold**`; a model that writes lists or headings shows them as typed. The example config asks for plain prose; local models ignore that more often than hosted ones.

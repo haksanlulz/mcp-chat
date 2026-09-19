@@ -6,8 +6,9 @@
 //   npm run dev:server & npm run dev:web &   (with a real mcp-chat.config.json)
 //   node tools/screenshot.mjs
 //
-// Env: CHROME (path to chrome.exe / google-chrome), UI (default http://127.0.0.1:5173),
+// Env: CHROME (path to chrome.exe / google-chrome), UI (default http://localhost:5173),
 //      QUESTIONS (JSON array of strings; defaults below).
+// Needs Node 22+ (global WebSocket). The runtime itself runs on 20.
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 

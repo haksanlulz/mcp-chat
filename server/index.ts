@@ -13,7 +13,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { runAgent, type AgentEvent, type Message, type Model } from "./agent.js";
+import { runAgent, type AgentEvent, type Model } from "./agent.js";
+import { parseChatBody } from "./api.js";
 import { McpManager, type ServerConfig } from "./mcp.js";
 import { OllamaModel } from "./providers/ollama.js";
 import { AnthropicModel } from "./providers/anthropic.js";
@@ -53,10 +54,6 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-function isMessages(v: unknown): v is Message[] {
-  return Array.isArray(v) && v.every((m) => m && typeof m === "object" && "role" in m && "content" in m);
-}
-
 async function main(): Promise<void> {
   const cfg = loadConfig();
   const mcp = new McpManager();
@@ -76,10 +73,8 @@ async function main(): Promise<void> {
         return json(res, 200, { tools: mcp.tools() });
       }
       if (req.method === "POST" && url.pathname === "/api/chat") {
-        const body = (await readJson(req)) as { messages?: unknown };
-        if (!isMessages(body.messages) || !body.messages.length) {
-          return json(res, 400, { error: "body must be { messages: [{ role, content }, ...] } with at least one message" });
-        }
+        const parsed = parseChatBody(await readJson(req));
+        if (!parsed.ok) return json(res, 400, { error: parsed.error });
         res.writeHead(200, {
           "content-type": "text/event-stream",
           "cache-control": "no-cache",
@@ -87,7 +82,7 @@ async function main(): Promise<void> {
         });
         const emit = (e: AgentEvent) => { res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`); };
         await runAgent({
-          model, tools: mcp.tools(), messages: body.messages, emit,
+          model, tools: mcp.tools(), messages: parsed.messages, emit,
           callTool: (c) => mcp.call(c),
           ...(cfg.maxIterations ? { maxIterations: cfg.maxIterations } : {}),
         });

@@ -32,6 +32,9 @@ A change is DONE when:
 | I4 | `done` exactly once, last | asserted in every loop test |
 | I5 | A tool result never renders as answer text; a failed call is a failed card | `test/web.test.tsx` "an assistant turn whose only tool call failed carries no answer text" — red when the card is replaced by a text div; "a failed call renders as an error card" — red when the alert is removed (both probed 2026-09-18) |
 | I6 | A frame split across SSE chunks is one frame | "a frame split across two chunks is one frame" — red when the decoder drops the carry-over (probed 2026-09-18) |
+| I7 | The client can send only user/assistant turns; a `tool` role never reaches the model | `test/api.test.ts` "a client-supplied tool message is refused" — red when the role check is removed (probed 2026-09-19); `smoke.ts` asserts the 400 through the real socket |
+| I8 | Provider wire: split frames reassemble, tool inputs assemble, error frames throw, transcripts map | `test/providers.test.ts` — five probes red 2026-09-19: Ollama carry-over dropped, Ollama error swallowed, Anthropic `input_json_delta` not accumulated, tool results not folded into one user turn, Anthropic stream error ignored |
+| I9 | One MCP server failing to start never takes the runtime down; server `isError` passes through | `test/mcp.test.ts` over a REAL stdio server — red when the catch rethrows (beforeAll fails, 5 skipped) and when a missing-server call throws instead of returning `isError` (probed 2026-09-19) |
 
 ⚠️ **The first mutation-probe run reported all three "STAYED GREEN" — the probe was wrong, not the tests.** Its regex read vitest's summary line through ANSI colour codes and never matched `Tests N failed`. Re-run with the codes stripped: all three red. Rule 23 — a verifier's mass result is a claim about the verifier first.
 
@@ -40,8 +43,10 @@ A change is DONE when:
 | Class | Rungs |
 |---|---|
 | loop / validation (`server/agent.ts`) | `npm test` + re-run the three mutation probes (README § Rules) |
-| MCP manager / providers | `npm test` + `npm run typecheck` + runtime smoke: start with a real server, `curl /api/health`, `curl /api/tools` |
-| provider wire changes | + one live turn (`POST /api/chat`) against the real provider, frames read |
+| MCP manager (`server/mcp.ts`) | `npm test` (real stdio fixture) + `npm run smoke` (real runtime, every route, stopped by PID) |
+| provider wire changes | `npm test` (stubbed-fetch wire tests) + one live turn (`POST /api/chat`) against the real provider, frames read |
+| `/api/*` shape | `npm test` (`test/api.test.ts`) + `npm run smoke` |
+| any push | CI green on Node 20 and 22 (`.github/workflows/ci.yml`: typecheck · test · build · smoke) |
 | web | `npm test` (the four web RED LEGs) + `node tools/screenshot.mjs` against the live runtime; open it and click one failed tool card |
 | docs only | none |
 
@@ -82,4 +87,5 @@ Check: test/agent.test.ts "RED LEG: a tool that returns isError…", "…thrown 
 ## §6 Escape log
 
 - 2026-09-15 — none yet in the artifact. Two instrument escapes during the build, both recorded above: the ANSI-blind mutation probe, and the orphan sweep that matched `tsx`.
+- 2026-09-19 — none in the artifact. One instrument escape: the mutation probe's summary regex read vitest's `Tests 1 passed | 5 skipped` (a failed `beforeAll`) as zero failures and printed STAYED GREEN for a mutation that had in fact broken the suite. **The exit code is the verdict; a parsed summary line is a convenience** — the re-run keyed on `npm` exit status reported RED.
 - 2026-09-18 — none in the artifact. Two more instrument escapes: the web mutation probe's first run crashed on a cp1252 decode of vitest's output before any verdict, and its `write_text` restore rewrote a file's line endings (fixed with `newline=""`; `git status` is the check). And `tools/screenshot.mjs` first targeted `127.0.0.1:5173` while vite binds `localhost`, which resolves to `::1` here — the page was a connection-refused error and the script correctly refused to shoot it.
