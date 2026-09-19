@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+// vitest/config, not vite: vitest 5 types the `test` block only through its own entry.
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // Front end lives in web/; the agent runtime in server/ is run with tsx, not
