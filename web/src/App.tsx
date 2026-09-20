@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Markdown } from "./markdown";
 import { ToolCallCard } from "./ToolCallCard";
 import { useChat, type Turn } from "./useChat";
 
@@ -62,23 +63,12 @@ export function App() {
   );
 }
 
-/**
- * The one piece of markdown models emit constantly even when told not to:
- * `**bold**`. Rendered as <b>; everything else stays literal text, so there is
- * no HTML path from the model to the page. Odd asterisk counts are left as-is.
- */
-export function emphasis(text: string): ReactNode[] {
-  const parts = text.split("**");
-  if (parts.length % 2 === 0) return [text];
-  return parts.map((s, i) => (i % 2 ? <b key={i}>{s}</b> : s));
-}
-
 export function TurnView({ turn }: { turn: Turn }) {
   if (turn.role === "user") return <div className="turn turn--user">{turn.text}</div>;
   return (
     <div className="turn turn--assistant">
       {turn.parts.map((p, i) => p.kind === "text"
-        ? <div key={i} className="text">{emphasis(p.text)}</div>
+        ? <div key={i} className="text"><Markdown text={p.text} /></div>
         : <ToolCallCard key={p.call.id} call={p.call} />)}
       {turn.errors.map((e, i) => <div key={`e${i}`} className="turn__error" role="alert">{e}</div>)}
       {turn.stoppedBy === "cap" && <div className="turn__note">Stopped at the tool-call limit without a final answer.</div>}

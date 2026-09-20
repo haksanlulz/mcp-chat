@@ -54,7 +54,7 @@ Frames, in order: `token` · `tool_call` · `tool_result` (with `isError`) · `e
 ## Testing
 
 ```
-npm test          # 42 tests, offline
+npm test          # 49 tests, offline
 npm run typecheck
 npm run smoke     # starts the real runtime against a fixture MCP server, hits every route, stops it by PID
 ```
@@ -66,6 +66,7 @@ npm run smoke     # starts the real runtime against a fixture MCP server, hits e
 | `test/mcp.test.ts` | server start/fail isolation, qualified names, `isError` pass-through | a **real MCP server over stdio** (`test/fixtures/echo-server.ts`) |
 | `test/api.test.ts` | `/api/chat` body: roles, caps, extra keys | pure |
 | `test/web.test.tsx` | error card, cap note, no result-as-text, SSE reassembly, bold | `react-dom/server`, no browser |
+| `test/markdown.test.tsx` | the markdown subset: headings, nested lists, code, links, no HTML path, `javascript:` refused | `react-dom/server`, no browser |
 
 Every RED LEG test was shown to fail when its rule was removed before it was trusted (mutation-probed 2026-09-15, 09-18, 09-19). CI runs all of it on Node 20 and 22.
 
@@ -78,7 +79,8 @@ Each has a test in `test/agent.test.ts`. The UI's own rules live in `test/web.te
 3. **The iteration cap is loud.** Hitting it emits an `error` frame and `done(cap)`; nothing is truncated quietly.
 4. **Unknown tool names are refused before any call.**
 5. **The client sends user and assistant turns only.** `POST /api/chat` refuses `tool` and `system` roles, non-string content, a transcript that does not end on the user, more than 200 messages or 32K characters per message. Tool results exist only inside one request, built by the loop — a client cannot forge one.
-6. **A failed call is a failed card, never answer text** (`web/`). The transcript keeps tool results inside cards; the only text a reader sees as the answer is what the model streamed as tokens. `**bold**` is the one piece of markdown rendered, as `<b>`; nothing else the model emits becomes markup.
+6. **A failed call is a failed card, never answer text** (`web/`). The transcript keeps tool results inside cards; the only text a reader sees as the answer is what the model streamed as tokens.
+7. **Model text is rendered as markdown, to React elements only** (`web/src/markdown.tsx`): headings, nested bullet and numbered lists, paragraphs, `**bold**`, inline and fenced code, and links to `http(s)` URLs. No raw HTML ever reaches the page — every string becomes a text node — a `javascript:` link keeps its text and gets no anchor, and the `[tool_name](link)` pseudo-links models write for tools they mean render as code. No dependency; the subset is what models actually emit. The transcript keeps tool results inside cards; the only text a reader sees as the answer is what the model streamed as tokens. `**bold**` is the one piece of markdown rendered, as `<b>`; nothing else the model emits becomes markup.
 
 ## Measured
 
@@ -94,4 +96,3 @@ Each has a test in `test/agent.test.ts`. The UI's own rules live in `test/web.te
 
 - Tool history is not round-tripped across requests; each `POST /api/chat` sends the human-readable transcript only.
 - No auth, no TLS, no remote MCP transports — local tool, local model, local servers.
-- No markdown beyond `**bold**`; a model that writes lists or headings shows them as typed. The example config asks for plain prose; local models ignore that more often than hosted ones.

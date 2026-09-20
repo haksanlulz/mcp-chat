@@ -7,7 +7,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ToolCallCard } from "../web/src/ToolCallCard";
-import { TurnView, emphasis } from "../web/src/App";
+import { TurnView } from "../web/src/App";
+import { inline } from "../web/src/markdown";
 import { sse, type ToolCallView, type Turn } from "../web/src/useChat";
 
 const FAILED: ToolCallView = {
@@ -22,7 +23,7 @@ const OK: ToolCallView = { ...FAILED, id: "c2", status: "ok", result: '{"total":
 
 /** Text inside `.text` nodes only — what a reader takes as the assistant's answer. */
 function answerText(html: string): string {
-  return [...html.matchAll(/<div class="text[^"]*">([^<]*)<\/div>/g)].map((m) => m[1]).join("");
+  return [...html.matchAll(/<div class="text[^"]*">(.*?)<\/div>/g)].map((m) => m[1]!.replace(/<[^>]+>/g, "")).join("");
 }
 
 describe("ToolCallCard", () => {
@@ -71,17 +72,17 @@ describe("TurnView", () => {
     expect(a).toBeGreaterThan(-1);
     expect(a).toBeLessThan(b);
     expect(b).toBeLessThan(c);
-    expect(answerText(html)).toBe("Looking that up. 128 open violations.");
+    expect(answerText(html)).toBe("Looking that up.128 open violations."); // paragraphs trim; the card sits between them
   });
 });
 
-describe("emphasis", () => {
+describe("inline emphasis", () => {
   it("RED LEG: **bold** renders as <b>, never as literal asterisks", () => {
-    const html = renderToStaticMarkup(<div>{emphasis("owner is **WFHA 1520 SEDGWICK LP**, agent **MHR**.")}</div>);
+    const html = renderToStaticMarkup(<div>{inline("owner is **WFHA 1520 SEDGWICK LP**, agent **MHR**.")}</div>);
     expect(html).toBe("<div>owner is <b>WFHA 1520 SEDGWICK LP</b>, agent <b>MHR</b>.</div>");
   });
   it("leaves an unbalanced marker alone and never opens an HTML path", () => {
-    expect(renderToStaticMarkup(<div>{emphasis("a ** b <script>x</script>")}</div>))
+    expect(renderToStaticMarkup(<div>{inline("a ** b <script>x</script>")}</div>))
       .toBe("<div>a ** b &lt;script&gt;x&lt;/script&gt;</div>");
   });
 });
