@@ -56,6 +56,21 @@ describe("Markdown", () => {
     expect(out).toBe("<p>line one<br/>line two</p><p>next</p>");
   });
 
+  it("RED LEG: a bare http(s) URL autolinks, trailing punctuation stays outside the anchor, and nothing else does", () => {
+    const out = html("See https://scryfall.com/card/msc/806?utm_source=api. Also (http://example.com/a_b) and ftp://nope and www.no.com");
+    expect(out).toContain('<a href="https://scryfall.com/card/msc/806?utm_source=api" target="_blank" rel="noopener noreferrer">https://scryfall.com/card/msc/806?utm_source=api</a>.');
+    expect(out).toContain('<a href="http://example.com/a_b" target="_blank" rel="noopener noreferrer">http://example.com/a_b</a>)');
+    expect(out).not.toContain('href="ftp:');
+    expect(out).not.toContain('href="www');
+    expect(out).toContain("ftp://nope");
+  });
+
+  it("a URL inside inline code or a markdown link is not double-linked", () => {
+    const out = html("`https://a.example` and [x](https://b.example)");
+    expect(out).toContain("<code>https://a.example</code>");
+    expect((out.match(/<a /g) ?? []).length).toBe(1);
+  });
+
   it("an unbalanced ** is left alone", () => {
     expect(html("a ** b")).toBe("<p>a ** b</p>");
   });

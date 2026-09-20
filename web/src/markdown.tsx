@@ -92,7 +92,12 @@ function indentOf(line: string): number {
 
 // ---- inline ---------------------------------------------------------------
 
-const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[([^\]]+)\]\(([^)\s]+)\))/g;
+// Order matters: code and [text](url) are matched before a bare URL so a URL
+// inside either is never linked twice. A bare URL stops at whitespace; the
+// trailing punctuation a sentence leaves on it (".", ")", ",") is peeled off
+// below so the anchor ends where the URL does.
+const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[([^\]]+)\]\(([^)\s]+)\))|(https?:\/\/[^\s<]+)/g;
+const TRAILING = /[.,;:!?)\]]+$/;
 
 /** Inline markdown -> nodes. Bold, code, links; everything else is text. */
 export function inline(text: string): ReactNode[] {
@@ -102,8 +107,14 @@ export function inline(text: string): ReactNode[] {
   for (const m of text.matchAll(INLINE)) {
     const at = m.index ?? 0;
     if (at > last) out.push(text.slice(last, at));
-    const [whole, code, bold, , linkText, href] = m;
-    if (code) out.push(<code key={k++}>{code.slice(1, -1)}</code>);
+    const [whole, code, bold, , linkText, href, bare] = m;
+    if (bare) {
+      const trail = TRAILING.exec(bare)?.[0] ?? "";
+      const url = trail ? bare.slice(0, -trail.length) : bare;
+      out.push(<a key={k++} href={url} target="_blank" rel="noopener noreferrer">{url}</a>);
+      if (trail) out.push(trail);
+    }
+    else if (code) out.push(<code key={k++}>{code.slice(1, -1)}</code>);
     else if (bold) out.push(<b key={k++}>{bold.slice(2, -2)}</b>);
     else if (linkText !== undefined && href !== undefined) {
       if (/^https?:\/\//i.test(href)) out.push(<a key={k++} href={href} target="_blank" rel="noopener noreferrer">{linkText}</a>);
