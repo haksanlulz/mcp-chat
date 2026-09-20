@@ -96,10 +96,17 @@ function indentOf(line: string): number {
 // inside either is never linked twice. A bare URL stops at whitespace; the
 // trailing punctuation a sentence leaves on it (".", ")", ",") is peeled off
 // below so the anchor ends where the URL does.
-const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[([^\]]+)\]\(([^)\s]+)\))|(https?:\/\/[^\s<]+)/g;
+//
+// Emphasis: `**bold**`, `*italic*` and `_italic_`. Bold is matched before
+// italic so `**x**` is never read as an empty italic wrapping `*x*`, and the
+// contents of either are parsed again so `**bold *and italic***` nests. A
+// single `*` or `_` that is not closed on the same line, or that sits inside a
+// word (`snake_case`, `2 * 3`), stays text: the italic delimiters must open
+// after a non-word character and close before one.
+const INLINE = /(`[^`]+`)|(\*\*(.+?)\*\*(?!\*))|(\[([^\]]+)\]\(([^)\s]+)\))|(https?:\/\/[^\s<]+)|(?<![\w*])\*(?!\s)((?:[^*]|\*\*)+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)([^_]+?)(?<!\s)_(?![\w_])/g;
 const TRAILING = /[.,;:!?)\]]+$/;
 
-/** Inline markdown -> nodes. Bold, code, links; everything else is text. */
+/** Inline markdown -> nodes. Bold, italic, code, links; everything else is text. */
 export function inline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
@@ -107,7 +114,7 @@ export function inline(text: string): ReactNode[] {
   for (const m of text.matchAll(INLINE)) {
     const at = m.index ?? 0;
     if (at > last) out.push(text.slice(last, at));
-    const [whole, code, bold, , linkText, href, bare] = m;
+    const [whole, code, bold, boldInner, , linkText, href, bare, starInner, underInner] = m;
     if (bare) {
       const trail = TRAILING.exec(bare)?.[0] ?? "";
       const url = trail ? bare.slice(0, -trail.length) : bare;
@@ -115,7 +122,8 @@ export function inline(text: string): ReactNode[] {
       if (trail) out.push(trail);
     }
     else if (code) out.push(<code key={k++}>{code.slice(1, -1)}</code>);
-    else if (bold) out.push(<b key={k++}>{bold.slice(2, -2)}</b>);
+    else if (bold) out.push(<b key={k++}>{inline(boldInner ?? "")}</b>);
+    else if (starInner !== undefined || underInner !== undefined) out.push(<i key={k++}>{inline(starInner ?? underInner ?? "")}</i>);
     else if (linkText !== undefined && href !== undefined) {
       if (/^https?:\/\//i.test(href)) out.push(<a key={k++} href={href} target="_blank" rel="noopener noreferrer">{linkText}</a>);
       // models write [tool_name](link) for a tool they mean, not a URL: show the name as code

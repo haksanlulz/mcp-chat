@@ -74,4 +74,16 @@ describe("Markdown", () => {
   it("an unbalanced ** is left alone", () => {
     expect(html("a ** b")).toBe("<p>a ** b</p>");
   });
+
+  it("RED LEG: *italic* and _italic_ render as <i>; a bare * or a * inside a word stays text", () => {
+    expect(html("printed in *Limited Edition Alpha* (1993) and _Beta_")).toBe("<p>printed in <i>Limited Edition Alpha</i> (1993) and <i>Beta</i></p>");
+    expect(html("2 * 3 = 6 and snake_case_name")).toBe("<p>2 * 3 = 6 and snake_case_name</p>");
+    // bold and italic together, either nesting
+    expect(html("**bold *and italic***")).toBe("<p><b>bold <i>and italic</i></b></p>");
+    expect(html("*it **bold** it*")).toBe("<p><i>it <b>bold</b> it</i></p>");
+  });
+
+  it("a * that starts a line is a bullet, not italics", () => {
+    expect(html("* one\n* two")).toBe("<ul><li>one</li><li>two</li></ul>");
+  });
 });
