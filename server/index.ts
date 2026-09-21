@@ -9,6 +9,13 @@
  * chosen by env: ANTHROPIC_API_KEY set -> Anthropic; otherwise Ollama at
  * OLLAMA_BASE_URL (default 127.0.0.1:11434) with OLLAMA_MODEL. MCP_CHAT_PORT
  * overrides 8731. Binds 127.0.0.1 only; this is a local tool.
+ *
+ * Debug surface (this is a testbed):
+ *   MCP_CHAT_THINK=1              ask Ollama for the model's reasoning (probed; models without it fall back)
+ *   ANTHROPIC_THINKING_BUDGET=N   enable extended thinking on the Anthropic provider with an N-token budget
+ *   MCP_CHAT_TRACE=1|<dir>        write every request's frames to traces/<id>.jsonl (default on under dev:server)
+ *   GET  /api/traces              list recent traces
+ *   GET  /api/trace/:id           one trace's frames
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
@@ -16,6 +23,7 @@ import { resolve } from "node:path";
 import { runAgent, type AgentEvent, type Model } from "./agent.js";
 import { parseChatBody } from "./api.js";
 import { McpManager, type ServerConfig } from "./mcp.js";
+import { TraceStore } from "./trace.js";
 import { OllamaModel } from "./providers/ollama.js";
 import { AnthropicModel } from "./providers/anthropic.js";
 
@@ -35,11 +43,16 @@ function pickModel(cfg: Config): { model: Model; label: string } {
   const key = process.env.ANTHROPIC_API_KEY;
   if (key) {
     const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5";
-    return { model: new AnthropicModel({ apiKey: key, model, ...(cfg.system ? { system: cfg.system } : {}) }), label: `anthropic:${model}` };
+    const budget = Number(process.env.ANTHROPIC_THINKING_BUDGET ?? 0);
+    return {
+      model: new AnthropicModel({ apiKey: key, model, ...(cfg.system ? { system: cfg.system } : {}), ...(budget > 0 ? { thinkingBudget: budget } : {}) }),
+      label: `anthropic:${model}${budget > 0 ? ` (thinking ${budget})` : ""}`,
+    };
   }
   const model = process.env.OLLAMA_MODEL ?? "qwen3-coder:30b";
   const baseUrl = process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
-  return { model: new OllamaModel({ model, baseUrl }), label: `ollama:${model}` };
+  const think = process.env.MCP_CHAT_THINK === "1";
+  return { model: new OllamaModel({ model, baseUrl, think }), label: `ollama:${model}${think ? " (think)" : ""}` };
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -61,13 +74,22 @@ async function main(): Promise<void> {
   for (const s of status) console.error(`[mcp-chat] ${s.name}: ${s.state}${s.state === "up" ? ` (${s.tools} tools)` : ` — ${s.error}`}`);
   const { model, label } = pickModel(cfg);
   console.error(`[mcp-chat] model: ${label}`);
+  const traces = new TraceStore(process.env.MCP_CHAT_TRACE);
+  console.error(`[mcp-chat] traces: ${traces.dir ?? "off (MCP_CHAT_TRACE=1 to enable)"}`);
 
   const port = Number(process.env.MCP_CHAT_PORT ?? 8731);
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     try {
       if (req.method === "GET" && url.pathname === "/api/health") {
-        return json(res, 200, { ok: true, model: label, servers: mcp.status() });
+        return json(res, 200, { ok: true, model: label, servers: mcp.status(), traces: traces.enabled });
+      }
+      if (req.method === "GET" && url.pathname === "/api/traces") {
+        return json(res, 200, { enabled: traces.enabled, traces: traces.list() });
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/api/trace/")) {
+        const frames = traces.read(url.pathname.slice("/api/trace/".length));
+        return frames ? json(res, 200, { frames }) : json(res, 404, { error: "no such trace" });
       }
       if (req.method === "GET" && url.pathname === "/api/tools") {
         return json(res, 200, { tools: mcp.tools() });
@@ -75,12 +97,18 @@ async function main(): Promise<void> {
       if (req.method === "POST" && url.pathname === "/api/chat") {
         const parsed = parseChatBody(await readJson(req));
         if (!parsed.ok) return json(res, 400, { error: parsed.error });
+        const last = parsed.messages[parsed.messages.length - 1]!;
+        const trace = traces.begin({ model: label, messages: parsed.messages.length, question: last.content.slice(0, 200) });
         res.writeHead(200, {
           "content-type": "text/event-stream",
           "cache-control": "no-cache",
           connection: "keep-alive",
+          ...(trace ? { "x-mcp-chat-trace": trace.id } : {}),
         });
-        const emit = (e: AgentEvent) => { res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`); };
+        const emit = (e: AgentEvent) => {
+          trace?.write(e);
+          res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
+        };
         await runAgent({
           model, tools: mcp.tools(), messages: parsed.messages, emit,
           callTool: (c) => mcp.call(c),

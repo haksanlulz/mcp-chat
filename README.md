@@ -10,6 +10,16 @@ What it found, in its first week, in servers that already had passing suites and
 
 None of those are bugs a unit test would write, because each one is a correct response read wrong by the thing that reads it.
 
+## What you can see
+
+This is the part that makes it a testbed rather than a chat window. Press **debug** in the header:
+
+- **thinking** — the model's reasoning, streamed as its own block above the calls it leads to, when the provider exposes it. Ollama: `MCP_CHAT_THINK=1` (probed once; a model without thinking, like `qwen3-coder`, is remembered and asked without it). Anthropic: `ANTHROPIC_THINKING_BUDGET=<tokens>`. Never merged into the answer.
+- **turn strips** — one per model iteration: prompt tokens in, output tokens out, wall-clock ms, how it ended (`text` / `tool_calls` / `empty`). Expand one and you get the **exact prompt the model was sent**, message by message, plus the tool list. This is where "why did it guess Brooklyn" is answered: you read what it saw.
+- **traces** — with `MCP_CHAT_TRACE=1` every request's frames go to `traces/<id>.jsonl` (gitignored, unredacted by design), the id comes back in an `x-mcp-chat-trace` header, and `GET /api/traces` / `GET /api/trace/:id` read them back. The turn footer links to the trace.
+
+Measured on `qwen3.6:35b-a3b` with thinking on, one housing question: turn 1 was 8,077 tokens in (28 tool schemas) and 272 out in 2.1 s and ended in a tool call; turn 2 was 31,364 in (the 100-row violations result) and 487 out in 13.7 s. The prompt cost of a verbose tool result is visible instead of guessed.
+
 What it is: a TypeScript runtime that spawns MCP servers over stdio, hands their tools to a model (Ollama locally, or the Anthropic API), runs the tool loop with every argument validated before any call, and streams tokens and tool calls over SSE to a React front end that renders each call as a card — arguments, result, and whether it failed. No framework on the server (`node:http` + SSE), no SDK for the providers (raw fetch), one runtime dependency: `@modelcontextprotocol/sdk`.
 
 ![mcp-chat answering a housing question and a card question, each through a tool call rendered as a card](docs/screenshot.png)
@@ -55,28 +65,30 @@ Each server's tools are exposed to the model as `<name>__<tool>`, so two servers
 |---|---|
 | `GET /api/health` | `{ ok, model, servers: [{ name, state: up\|failed, tools, error? }] }` |
 | `GET /api/tools` | the qualified tool list the model sees |
-| `POST /api/chat` | `{ messages: [{ role, content }] }` → `text/event-stream` of frames below |
+| `POST /api/chat` | `{ messages: [{ role, content }] }` → `text/event-stream` of frames below; `x-mcp-chat-trace` header when tracing is on |
+| `GET /api/traces` | recent traces (id, model, question) |
+| `GET /api/trace/:id` | one trace's frames |
 
-Frames, in order: `token` · `tool_call` · `tool_result` (with `isError`) · `error` · `done` (`stoppedBy: answer | cap | error`). `done` is emitted exactly once, last.
+Frames, in order per iteration: `thinking` · `token` · `tool_call` · `turn` (iteration, the messages and tools sent, usage, how it ended) · `tool_result` (with `isError`) · `error` · `done` (`stoppedBy: answer | cap | error`). `done` is emitted exactly once, last.
 
 ## Testing
 
 ```
-npm test          # 53 tests, offline
+npm test          # 62 tests, offline
 npm run typecheck
 npm run smoke     # starts the real runtime against a fixture MCP server, hits every route, stops it by PID
 ```
 
 | file | what it pins | channel |
 |---|---|---|
-| `test/agent.test.ts` | the loop's rules below | scripted model, in-process |
-| `test/providers.test.ts` | Ollama NDJSON + Anthropic SSE parsing, transcript mapping, error frames, non-2xx | `fetch` stubbed with chunked streams |
+| `test/agent.test.ts` | the loop's rules below; `thinking` never a token; a `turn` frame per iteration carrying what was sent | scripted model, in-process |
+| `test/providers.test.ts` | Ollama NDJSON + Anthropic SSE parsing, transcript mapping, error frames, non-2xx; thinking on both providers, the Ollama think probe, usage/timing | `fetch` stubbed with chunked streams |
 | `test/mcp.test.ts` | server start/fail isolation, qualified names, `isError` pass-through | a **real MCP server over stdio** (`test/fixtures/echo-server.ts`) |
 | `test/api.test.ts` | `/api/chat` body: roles, caps, extra keys | pure |
-| `test/web.test.tsx` | error card, cap note, no result-as-text, SSE reassembly, bold | `react-dom/server`, no browser |
+| `test/web.test.tsx` | error card, cap note, no result-as-text, SSE reassembly, bold; debug view: thinking block, turn strips, prompt disclosure | `react-dom/server`, no browser |
 | `test/markdown.test.tsx` | the markdown subset: headings, nested lists, bold/italic nesting, code, links + bare-URL autolink, no HTML path, `javascript:` refused | `react-dom/server`, no browser |
 
-Every RED LEG test was shown to fail when its rule was removed before it was trusted (mutation-probed 2026-09-15, 09-18, 09-19, 09-20). CI runs all of it on Node 20 and 22.
+Every RED LEG test was shown to fail when its rule was removed before it was trusted (mutation-probed 2026-09-15, 09-18, 09-19, 09-20 ×2). CI runs all of it on Node 20 and 22.
 
 ## Rules the loop enforces
 
@@ -88,7 +100,8 @@ Each has a test in `test/agent.test.ts`. The UI's own rules live in `test/web.te
 4. **Unknown tool names are refused before any call.**
 5. **The client sends user and assistant turns only.** `POST /api/chat` refuses `tool` and `system` roles, non-string content, a transcript that does not end on the user, more than 200 messages or 32K characters per message. Tool results exist only inside one request, built by the loop — a client cannot forge one.
 6. **A failed call is a failed card, never answer text** (`web/`). The transcript keeps tool results inside cards; the only text a reader sees as the answer is what the model streamed as tokens.
-7. **Model text is rendered as markdown, to React elements only** (`web/src/markdown.tsx`): headings, nested bullet and numbered lists, paragraphs, `**bold**`, `*italic*` / `_italic_` (nesting either way; a `*` or `_` inside a word stays text), inline and fenced code, and links — `[text](http…)` and bare `http(s)://` URLs alike, opened in a new tab with `rel="noopener noreferrer"`. No raw HTML ever reaches the page — every string becomes a text node — a `javascript:` link keeps its text and gets no anchor, and the `[tool_name](link)` pseudo-links models write for tools they mean render as code. No dependency; the subset is what models actually emit.
+7. **Thinking is never an answer.** A provider's reasoning arrives as `thinking` frames, is kept as its own part, is shown only under debug, and never enters the transcript the model is re-sent.
+8. **Model text is rendered as markdown, to React elements only** (`web/src/markdown.tsx`): headings, nested bullet and numbered lists, paragraphs, `**bold**`, `*italic*` / `_italic_` (nesting either way; a `*` or `_` inside a word stays text), inline and fenced code, and links — `[text](http…)` and bare `http(s)://` URLs alike, opened in a new tab with `rel="noopener noreferrer"`. No raw HTML ever reaches the page — every string becomes a text node — a `javascript:` link keeps its text and gets no anchor, and the `[tool_name](link)` pseudo-links models write for tools they mean render as code. No dependency; the subset is what models actually emit.
 
 ## Measured
 
@@ -105,4 +118,5 @@ Each has a test in `test/agent.test.ts`. The UI's own rules live in `test/web.te
 This is a harness. It has what watching a server needs and nothing a product would.
 
 - Tool history is not round-tripped across requests; each `POST /api/chat` sends the human-readable transcript only.
-- No auth, no TLS, no remote MCP transports, no accounts, no persistence — local tool, local model, local servers, one tab.
+- No auth, no TLS, no remote MCP transports, no accounts, no persistence beyond the trace files — local tool, local model, local servers, one tab.
+- Traces are unredacted on purpose and are not rotated; delete `traces/` when it gets big.

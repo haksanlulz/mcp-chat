@@ -46,14 +46,14 @@ describe("ToolCallCard", () => {
 
 describe("TurnView", () => {
   it("RED LEG: an assistant turn whose only tool call failed carries no answer text", () => {
-    const turn: Turn = { role: "assistant", parts: [{ kind: "tool", call: FAILED }], errors: [], stoppedBy: "answer" };
+    const turn: Turn = { role: "assistant", parts: [{ kind: "tool", call: FAILED }], errors: [], turns: [], stoppedBy: "answer" };
     const html = renderToStaticMarkup(<TurnView turn={turn} />);
     expect(answerText(html)).toBe("");
     expect(html).toContain("tool--error");
   });
 
   it("RED LEG: done(cap) is announced, not silent", () => {
-    const turn: Turn = { role: "assistant", parts: [{ kind: "tool", call: OK }], errors: [], stoppedBy: "cap" };
+    const turn: Turn = { role: "assistant", parts: [{ kind: "tool", call: OK }], errors: [], turns: [], stoppedBy: "cap" };
     const html = renderToStaticMarkup(<TurnView turn={turn} />);
     expect(html).toContain("Stopped at the tool-call limit without a final answer.");
   });
@@ -63,6 +63,7 @@ describe("TurnView", () => {
       role: "assistant",
       parts: [{ kind: "text", text: "Looking that up. " }, { kind: "tool", call: OK }, { kind: "text", text: "128 open violations." }],
       errors: [],
+      turns: [],
       stoppedBy: "answer",
     };
     const html = renderToStaticMarkup(<TurnView turn={turn} />);
@@ -73,6 +74,43 @@ describe("TurnView", () => {
     expect(a).toBeLessThan(b);
     expect(b).toBeLessThan(c);
     expect(answerText(html)).toBe("Looking that up.128 open violations."); // paragraphs trim; the card sits between them
+  });
+});
+
+describe("debug view (testbed surface)", () => {
+  const TURN_INFO = { iteration: 1, messages: [{ role: "user" as const, content: "who owns 1520 Sedgwick" }], tools: ["housing__who_owns"], usage: { promptTokens: 1200, outputTokens: 40, ms: 812 }, endedWith: "tool_calls" as const, ms: 812 };
+
+  it("RED LEG: thinking renders in its own block, never inside answer text, and only when debug is on", () => {
+    const turn: Turn = { role: "assistant", parts: [{ kind: "thinking", text: "need the borough first" }, { kind: "text", text: "Bronx." }], errors: [], turns: [], stoppedBy: "answer" };
+    const on = renderToStaticMarkup(<TurnView turn={turn} debug />);
+    expect(on).toContain('class="thinking"');
+    expect(on).toContain("need the borough first");
+    expect(answerText(on)).toBe("Bronx.");
+    const off = renderToStaticMarkup(<TurnView turn={turn} debug={false} />);
+    expect(off).not.toContain("need the borough first");
+    expect(answerText(off)).toBe("Bronx.");
+  });
+
+  it("RED LEG: each model turn shows a strip with iteration, tokens and ms, and expands to the exact prompt the model was sent", () => {
+    const turn: Turn = { role: "assistant", parts: [{ kind: "tool", call: OK }], errors: [], turns: [TURN_INFO], stoppedBy: "answer" };
+    const html = renderToStaticMarkup(<TurnView turn={turn} debug />);
+    expect(html).toContain('class="turnstrip"');
+    expect(html).toMatch(/turn 1/);
+    expect(html).toMatch(/1,?200 in/);
+    expect(html).toMatch(/40 out/);
+    expect(html).toMatch(/812 ms/);
+    expect(html).toMatch(/tool_calls/);
+    // the prompt is in the document (inside a <details>), verbatim
+    expect(html).toContain("who owns 1520 Sedgwick");
+    expect(html).toContain("housing__who_owns");
+    expect(html).toContain("<details");
+  });
+
+  it("with debug off, no strip and no prompt", () => {
+    const turn: Turn = { role: "assistant", parts: [{ kind: "tool", call: OK }], errors: [], turns: [TURN_INFO], stoppedBy: "answer" };
+    const html = renderToStaticMarkup(<TurnView turn={turn} debug={false} />);
+    expect(html).not.toContain("turnstrip");
+    expect(html).not.toContain("who owns 1520 Sedgwick");
   });
 });
 

@@ -25,7 +25,8 @@ writeFileSync(cfg, JSON.stringify({
   ],
 }));
 
-const env = { ...process.env, MCP_CHAT_CONFIG: cfg, MCP_CHAT_PORT: String(port) };
+const traceDir = join(dir, "traces");
+const env = { ...process.env, MCP_CHAT_CONFIG: cfg, MCP_CHAT_PORT: String(port), MCP_CHAT_TRACE: traceDir };
 delete env.ANTHROPIC_API_KEY; // provider choice is not under test; keep it Ollama so no key is ever read
 const runtime = spawn(process.execPath, ["--import", "tsx", join(here, "server", "index.ts")], { env, stdio: ["ignore", "ignore", "pipe"] });
 let stderr = "";
@@ -62,6 +63,15 @@ try {
   check("transcript ending on assistant → 400", (await post({ messages: [{ role: "user", content: "q" }, { role: "assistant", content: "a" }] })).status === 400);
   const r404 = await fetch(`${base}/api/nope`);
   check("unknown route → 404", r404.status === 404);
+
+  // Traces: health reports them on; a rejected request writes none; the list
+  // and the by-id route answer; an id that is not a trace is 404, and one with
+  // a path in it is 404 too (never a file outside the trace dir).
+  check("health reports traces enabled", health?.traces === true);
+  const listed: any = await (await fetch(`${base}/api/traces`)).json();
+  check("no trace written for 400s", listed.enabled === true && Array.isArray(listed.traces) && listed.traces.length === 0, JSON.stringify(listed).slice(0, 120));
+  check("unknown trace id → 404", (await fetch(`${base}/api/trace/nope`)).status === 404);
+  check("path-shaped trace id → 404", (await fetch(`${base}/api/trace/..%2Fconfig.json`)).status === 404);
 } finally {
   runtime.kill();
   await sleep(300);

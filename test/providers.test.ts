@@ -48,7 +48,7 @@ describe("OllamaModel", () => {
       'tent":"lo"},"done":false}\n{"message":{"role":"assistant","content":""},"done":true}\n',
     ]);
     const ev = await collect(model.turn([{ role: "user", content: "hi" }], []));
-    expect(ev).toEqual([{ type: "token", text: "Hel" }, { type: "token", text: "lo" }, { type: "end" }]);
+    expect(ev.filter((e) => e.type !== "usage")).toEqual([{ type: "token", text: "Hel" }, { type: "token", text: "lo" }, { type: "end" }]);
   });
 
   it("turns message.tool_calls into tool_call events with the arguments intact", async () => {
@@ -75,6 +75,42 @@ describe("OllamaModel", () => {
       { role: "tool", content: '{"owner":"X"}', tool_name: TOOL.name },
     ]);
     expect(cap.body.tools[0]).toEqual({ type: "function", function: { name: TOOL.name, description: TOOL.description, parameters: TOOL.inputSchema } });
+  });
+
+  it("RED LEG: message.thinking streams as thinking frames, never as tokens, and the final frame's timing becomes a usage event", async () => {
+    stubFetch(200, [
+      '{"message":{"role":"assistant","content":"","thinking":"need the tool"},"done":false}\n',
+      '{"message":{"role":"assistant","content":"Hi"},"done":false}\n',
+      '{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":120,"eval_count":8,"total_duration":40000000}\n',
+    ]);
+    const ev = await collect(new OllamaModel({ model: "t", baseUrl: "http://o.test", think: true }).turn([{ role: "user", content: "hi" }], []));
+    expect(ev).toEqual([
+      { type: "thinking", text: "need the tool" },
+      { type: "token", text: "Hi" },
+      { type: "usage", promptTokens: 120, outputTokens: 8, ms: 40 },
+      { type: "end" },
+    ]);
+  });
+
+  it("RED LEG: think is requested when enabled, and a model that rejects it is retried once without it and remembered", async () => {
+    let n = 0;
+    const bodies: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      n++;
+      if (n === 1) return new Response(JSON.stringify({ error: '"t" does not support thinking' }), { status: 400 });
+      return new Response(streamOf(['{"message":{"content":"ok"},"done":true}\n']), { status: 200 });
+    }));
+    const model = new OllamaModel({ model: "t", baseUrl: "http://o.test", think: true });
+    const ev = await collect(model.turn([{ role: "user", content: "hi" }], []));
+    expect(ev.at(-1)).toEqual({ type: "end" });
+    expect(bodies[0].think).toBe(true);
+    expect(bodies[1].think).toBeUndefined();
+    // second turn: no probe, straight to no-think
+    await collect(model.turn([{ role: "user", content: "again" }], []));
+    expect(bodies).toHaveLength(3);
+    expect(bodies[2].think).toBeUndefined();
+    expect(model.thinkingSupported).toBe(false);
   });
 
   it("RED LEG: an error frame throws instead of ending as a clean answer", async () => {
@@ -112,7 +148,7 @@ describe("AnthropicModel", () => {
     const cut = frames.indexOf('number": "15') + 4;
     stubFetch(200, [frames.slice(0, cut), frames.slice(cut)]);
     const ev = await collect(model.turn([{ role: "user", content: "who owns 1520" }], [TOOL]));
-    expect(ev).toEqual([
+    expect(ev.filter((e) => e.type !== "usage")).toEqual([
       { type: "token", text: "Looking. " },
       { type: "tool_call", call: { id: "toolu_1", name: "housing__who_owns", args: { house_number: "1520" } } },
       { type: "end" },
@@ -148,6 +184,38 @@ describe("AnthropicModel", () => {
         { type: "tool_result", tool_use_id: "b", content: "HPD 503", is_error: true },
       ] },
     ]);
+  });
+
+  it("RED LEG: thinking_delta streams as thinking frames, and message_delta usage becomes a usage event", async () => {
+    const frames = [
+      sse("message_start", { type: "message_start", message: { usage: { input_tokens: 300 } } }),
+      sse("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } }),
+      sse("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "user wants " } }),
+      sse("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "the owner" } }),
+      sse("content_block_stop", { index: 0 }),
+      sse("content_block_start", { index: 1, content_block: { type: "text", text: "" } }),
+      sse("content_block_delta", { index: 1, delta: { type: "text_delta", text: "Done." } }),
+      sse("content_block_stop", { index: 1 }),
+      sse("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 42 } }),
+      sse("message_stop", {}),
+    ].join("");
+    stubFetch(200, [frames]);
+    const ev = await collect(new AnthropicModel({ apiKey: "k", baseUrl: "https://a.test", thinkingBudget: 2048 }).turn([{ role: "user", content: "q" }], []));
+    expect(ev.filter((e) => e.type === "thinking").map((e) => (e as { text: string }).text)).toEqual(["user wants ", "the owner"]);
+    expect(ev.filter((e) => e.type === "token")).toEqual([{ type: "token", text: "Done." }]);
+    const usage = ev.find((e) => e.type === "usage") as any;
+    expect(usage).toMatchObject({ promptTokens: 300, outputTokens: 42 });
+    expect(typeof usage.ms).toBe("number");
+  });
+
+  it("RED LEG: the request asks for extended thinking only when a budget is set, and then max_tokens exceeds the budget", async () => {
+    const cap = stubFetch(200, [sse("message_stop", {})]);
+    await collect(new AnthropicModel({ apiKey: "k", baseUrl: "https://a.test", thinkingBudget: 4000 }).turn([{ role: "user", content: "q" }], []));
+    expect(cap.body.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
+    expect(cap.body.max_tokens).toBeGreaterThan(4000);
+    const cap2 = stubFetch(200, [sse("message_stop", {})]);
+    await collect(new AnthropicModel({ apiKey: "k", baseUrl: "https://a.test" }).turn([{ role: "user", content: "q" }], []));
+    expect(cap2.body.thinking).toBeUndefined();
   });
 
   it("RED LEG: a stream error event throws, so the loop reports error rather than an empty answer", async () => {

@@ -62,3 +62,25 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 .text pre { background: var(--tool); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; overflow: auto; margin: 6px 0 8px; }
 .text pre code { border: 0; padding: 0; background: none; font-size: 12px; }
 .text a { color: inherit; text-decoration: underline; }
+
+/* debug view */
+.bar__debug { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--muted); cursor: pointer; }
+.bar__debug--on { border-color: var(--warn); color: var(--warn); }
+.thinking { border-left: 3px solid var(--warn); padding-left: 10px; color: var(--muted); font-size: 13px; }
+.thinking summary { cursor: pointer; font-style: italic; }
+.thinking pre { white-space: pre-wrap; margin: 6px 0 0; font: 12px/1.4 monospace; max-height: 320px; overflow: auto; }
+.turnstrip { border: 1px dashed var(--line); border-radius: 8px; font-size: 12px; color: var(--muted); }
+.turnstrip summary { cursor: pointer; display: flex; gap: 12px; padding: 4px 10px; font-family: monospace; flex-wrap: wrap; }
+.turnstrip__n { font-weight: 600; color: var(--fg); }
+.turnstrip__end--tool_calls { color: var(--ok); }
+.turnstrip__end--text { color: var(--fg); }
+.turnstrip__end--empty { color: var(--err); }
+.turnstrip__body { padding: 6px 10px 10px; border-top: 1px dashed var(--line); }
+.turnstrip__label { font-style: italic; margin: 6px 0 4px; }
+.msg { margin: 4px 0; }
+.msg__role { font-family: monospace; font-weight: 600; color: var(--fg); }
+.msg--tool .msg__role { color: var(--ok); }
+.msg--system .msg__role { color: var(--warn); }
+.msg__body { white-space: pre-wrap; margin: 2px 0 0; font: 12px/1.4 monospace; max-height: 240px; overflow: auto; background: var(--tool); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.turn__trace { font-size: 12px; color: var(--muted); }
+.turn__trace a { color: inherit; }

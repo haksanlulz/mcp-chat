@@ -40,8 +40,14 @@ export type ToolCall = { id: string; name: string; args: Record<string, unknown>
 /** What a provider yields for one model turn. */
 export type ModelEvent =
   | { type: "token"; text: string }
+  /** The model's reasoning, when the provider exposes it. Never part of the answer. */
+  | { type: "thinking"; text: string }
   | { type: "tool_call"; call: ToolCall }
+  /** Cost and timing for the turn, when the provider reports them. */
+  | { type: "usage"; promptTokens?: number; outputTokens?: number; ms?: number }
   | { type: "end" };
+
+export type Usage = { promptTokens?: number; outputTokens?: number; ms?: number };
 
 export interface Model {
   /** One model turn. Yields tokens and tool calls, then `end`. */
@@ -54,7 +60,15 @@ export type CallTool = (call: ToolCall) => Promise<ToolResult>;
 /** Frames the HTTP layer forwards over SSE, in this order. */
 export type AgentEvent =
   | { type: "token"; text: string }
+  | { type: "thinking"; text: string }
   | { type: "tool_call"; call: ToolCall }
+  /**
+   * One per model iteration, emitted after that iteration's tokens and calls
+   * and before any tool runs: exactly what the model was sent (`messages`,
+   * `tools`), what it cost, and how it ended. This is the debug record — the
+   * answer to "why did it call that" is in `messages`.
+   */
+  | { type: "turn"; iteration: number; messages: Message[]; tools: string[]; usage: Usage; endedWith: "text" | "tool_calls" | "empty"; ms: number }
   | { type: "tool_result"; callId: string; name: string; content: string; isError: boolean }
   | { type: "error"; message: string; callId?: string }
   | { type: "done"; iterations: number; stoppedBy: "answer" | "cap" | "error" };
@@ -149,14 +163,23 @@ export async function runAgent(opts: RunOptions): Promise<AgentEvent[]> {
   for (let iteration = 1; iteration <= maxIterations; iteration++) {
     let text = "";
     const calls: ToolCall[] = [];
+    let usage: Usage = {};
+    // a copy of what THIS turn was sent, taken before the loop appends to it
+    const sent = messages.map((m) => ({ ...m }));
+    const started = Date.now();
     try {
       for await (const ev of model.turn(messages, tools)) {
         if (ev.type === "token") {
           text += ev.text;
           out({ type: "token", text: ev.text });
+        } else if (ev.type === "thinking") {
+          out({ type: "thinking", text: ev.text });
         } else if (ev.type === "tool_call") {
           calls.push(ev.call);
           out({ type: "tool_call", call: ev.call });
+        } else if (ev.type === "usage") {
+          const { type: _t, ...u } = ev;
+          usage = { ...usage, ...u };
         }
       }
     } catch (err) {
@@ -164,6 +187,10 @@ export async function runAgent(opts: RunOptions): Promise<AgentEvent[]> {
       out({ type: "done", iterations: iteration, stoppedBy: "error" });
       return log;
     }
+    out({
+      type: "turn", iteration, messages: sent, tools: tools.map((t) => t.name), usage,
+      endedWith: calls.length ? "tool_calls" : text ? "text" : "empty", ms: Date.now() - started,
+    });
 
     messages.push(calls.length ? { role: "assistant", content: text, toolCalls: calls } : { role: "assistant", content: text });
     if (!calls.length) {

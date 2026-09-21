@@ -18,9 +18,24 @@ export type ToolCallView = {
   result?: string;
 };
 
+/** One model iteration, as the runtime reported it: the debug record. */
+export type TurnInfo = {
+  iteration: number;
+  messages: Array<{ role: string; content: string; toolCalls?: unknown; name?: string; isError?: boolean }>;
+  tools: string[];
+  usage: { promptTokens?: number; outputTokens?: number; ms?: number };
+  endedWith: "text" | "tool_calls" | "empty";
+  ms: number;
+};
+
+export type Part =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; call: ToolCallView };
+
 export type Turn =
   | { role: "user"; text: string }
-  | { role: "assistant"; parts: Array<{ kind: "text"; text: string } | { kind: "tool"; call: ToolCallView }>; errors: string[]; stoppedBy?: "answer" | "cap" | "error" };
+  | { role: "assistant"; parts: Part[]; errors: string[]; turns: TurnInfo[]; traceId?: string; stoppedBy?: "answer" | "cap" | "error" };
 
 type WireMessage = { role: "user" | "assistant"; content: string };
 
@@ -43,7 +58,7 @@ export function useChat() {
       const next = prev.slice();
       const last = next[next.length - 1];
       if (!last || last.role !== "assistant") return prev;
-      const copy = { ...last, parts: last.parts.slice(), errors: last.errors.slice() };
+      const copy = { ...last, parts: last.parts.slice(), errors: last.errors.slice(), turns: last.turns.slice() };
       fn(copy);
       next[next.length - 1] = copy;
       return next;
@@ -54,7 +69,7 @@ export function useChat() {
     if (busy || !text.trim()) return;
     const userTurn: Turn = { role: "user", text };
     const history = [...turns, userTurn];
-    setTurns([...history, { role: "assistant", parts: [], errors: [] }]);
+    setTurns([...history, { role: "assistant", parts: [], errors: [], turns: [] }]);
     setBusy(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -70,6 +85,8 @@ export function useChat() {
         patchLast((a) => { a.errors.push(`HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`); a.stoppedBy = "error"; });
         return;
       }
+      const traceId = res.headers.get("x-mcp-chat-trace");
+      if (traceId) patchLast((a) => { a.traceId = traceId; });
       for await (const frame of sse(res.body)) {
         const e = frame as { type: string; [k: string]: unknown };
         if (e.type === "token") {
@@ -78,6 +95,16 @@ export function useChat() {
             if (last && last.kind === "text") a.parts[a.parts.length - 1] = { kind: "text", text: last.text + String(e.text) };
             else a.parts.push({ kind: "text", text: String(e.text) });
           });
+        } else if (e.type === "thinking") {
+          // its own part kind: never merged into text, so it can never read as the answer
+          patchLast((a) => {
+            const last = a.parts[a.parts.length - 1];
+            if (last && last.kind === "thinking") a.parts[a.parts.length - 1] = { kind: "thinking", text: last.text + String(e.text) };
+            else a.parts.push({ kind: "thinking", text: String(e.text) });
+          });
+        } else if (e.type === "turn") {
+          const { type: _t, ...info } = e as unknown as { type: string } & TurnInfo;
+          patchLast((a) => a.turns.push(info));
         } else if (e.type === "tool_call") {
           const call = e.call as { id: string; name: string; args: Record<string, unknown> };
           patchLast((a) => a.parts.push({ kind: "tool", call: { id: call.id, name: call.name, args: call.args, status: "running" } }));

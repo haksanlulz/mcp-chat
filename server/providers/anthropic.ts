@@ -17,12 +17,19 @@ export type AnthropicOptions = {
   maxTokens?: number;  // default 2048
   system?: string;
   timeoutMs?: number;
+  /**
+   * Extended thinking budget in tokens. When set, the request enables
+   * thinking and `thinking_delta` events stream as `thinking` frames. The API
+   * requires max_tokens > budget, so max_tokens is raised to cover it.
+   */
+  thinkingBudget?: number;
 };
 
 type Block =
   | { type: "text"; text: string }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+
 
 export class AnthropicModel implements Model {
   private readonly base: string;
@@ -31,16 +38,21 @@ export class AnthropicModel implements Model {
   }
 
   async *turn(messages: Message[], tools: ToolSpec[]): AsyncIterable<ModelEvent> {
+    const budget = this.opts.thinkingBudget;
+    const maxTokens = this.opts.maxTokens ?? 2048;
     const body = {
       model: this.opts.model ?? "claude-sonnet-5",
-      max_tokens: this.opts.maxTokens ?? 2048,
+      // extended thinking requires max_tokens > budget_tokens
+      max_tokens: budget ? Math.max(maxTokens, budget + 1024) : maxTokens,
       stream: true,
+      ...(budget ? { thinking: { type: "enabled", budget_tokens: budget } } : {}),
       ...(this.opts.system ? { system: this.opts.system } : {}),
       messages: toAnthropic(messages),
       tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
     };
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.opts.timeoutMs ?? 120_000);
+    const started = Date.now();
     let res: Response;
     try {
       res = await fetch(`${this.base}/v1/messages`, {
@@ -64,10 +76,17 @@ export class AnthropicModel implements Model {
     }
     // One in-flight tool_use block at a time; its JSON input streams in pieces.
     let pending: { id: string; name: string; json: string } | null = null;
+    let promptTokens: number | undefined;
+    let outputTokens: number | undefined;
     try {
       for await (const ev of sse(res.body)) {
         const data = ev.data as Record<string, any>;
         switch (ev.event) {
+          case "message_start": {
+            const u = data.message?.usage;
+            if (typeof u?.input_tokens === "number") promptTokens = u.input_tokens;
+            break;
+          }
           case "content_block_start": {
             const cb = data.content_block;
             if (cb?.type === "tool_use") pending = { id: cb.id, name: cb.name, json: "" };
@@ -76,7 +95,13 @@ export class AnthropicModel implements Model {
           case "content_block_delta": {
             const d = data.delta;
             if (d?.type === "text_delta" && d.text) yield { type: "token", text: d.text };
+            else if (d?.type === "thinking_delta" && d.thinking) yield { type: "thinking", text: d.thinking };
             else if (d?.type === "input_json_delta" && pending) pending.json += d.partial_json ?? "";
+            break;
+          }
+          case "message_delta": {
+            const u = data.usage;
+            if (typeof u?.output_tokens === "number") outputTokens = u.output_tokens;
             break;
           }
           case "content_block_stop": {
@@ -98,6 +123,7 @@ export class AnthropicModel implements Model {
     } finally {
       clearTimeout(timer);
     }
+    yield { type: "usage", ...(promptTokens !== undefined ? { promptTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}), ms: Date.now() - started };
     yield { type: "end" };
   }
 }

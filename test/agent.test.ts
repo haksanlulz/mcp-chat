@@ -51,7 +51,7 @@ describe("runAgent", () => {
     const model = scripted([[{ type: "token", text: "Hel" }, { type: "token", text: "lo" }, { type: "end" }]]);
     const { events, emit } = collect();
     await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "hi" }], callTool: async () => ({ content: "", isError: false }), emit });
-    expect(events.map((e) => e.type)).toEqual(["token", "token", "done"]);
+    expect(events.map((e) => e.type)).toEqual(["token", "token", "turn", "done"]);
     expect(events.at(-1)).toEqual({ type: "done", iterations: 1, stoppedBy: "answer" });
   });
 
@@ -68,7 +68,7 @@ describe("runAgent", () => {
       callTool: async (c) => { seen.push(c.args); return { content: '{"total":128}', isError: false }; },
     });
     expect(seen).toEqual([call.args]);
-    expect(events.map((e) => e.type)).toEqual(["tool_call", "tool_result", "token", "done"]);
+    expect(events.map((e) => e.type)).toEqual(["tool_call", "turn", "tool_result", "token", "turn", "done"]);
     const toolMsg = model.lastMessages.find((m) => m.role === "tool");
     expect(toolMsg).toMatchObject({ toolCallId: "c1", isError: false, content: '{"total":128}' });
   });
@@ -128,6 +128,46 @@ describe("runAgent", () => {
     await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "x" }], emit, callTool: async () => { called++; return { content: "", isError: false }; } });
     expect(called).toBe(0);
     expect(events.find((e) => e.type === "tool_result")).toMatchObject({ isError: true, content: expect.stringContaining('unknown tool "nope__tool"') });
+  });
+
+  // Debug layer (2026-09-20, operator: "as a testing bed its not that great —
+  // there's no log or ability to see the model thinking"). Two new frames:
+  // `thinking` (the model's reasoning, when the provider exposes it) and
+  // `turn` (one per model iteration: what the model was sent, how long it
+  // took, what it cost, how it ended). Both are for the reader of a trace;
+  // neither may leak into the answer.
+  it("RED LEG: thinking is its own frame, never a token, and never enters the transcript the model is re-sent", async () => {
+    const model = scripted([[{ type: "thinking", text: "the user wants violations; " }, { type: "thinking", text: "call the tool" }, { type: "token", text: "ok" }, { type: "end" }]]);
+    const { events, emit } = collect();
+    await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "x" }], callTool: async () => ({ content: "", isError: false }), emit });
+    expect(events.filter((e) => e.type === "thinking").map((e) => (e as { text: string }).text)).toEqual(["the user wants violations; ", "call the tool"]);
+    expect(events.filter((e) => e.type === "token").map((e) => (e as { text: string }).text)).toEqual(["ok"]);
+    // the transcript the loop keeps (and would re-send) holds the answer only
+    const assistant = model.lastMessages.find((m) => m.role === "assistant") as { content: string } | undefined;
+    expect(assistant?.content).toBe("ok");
+    expect(JSON.stringify(model.lastMessages)).not.toContain("call the tool");
+  });
+
+  it("RED LEG: every model iteration emits a turn frame carrying the messages it was sent, its number, timing and usage", async () => {
+    const call = { id: "c1", name: LOOKUP.name, args: { house_number: "1", street: "X" } };
+    const model = scripted([
+      [{ type: "tool_call", call }, { type: "usage", promptTokens: 120, outputTokens: 8, ms: 40 }, { type: "end" }],
+      [{ type: "token", text: "done" }, { type: "usage", promptTokens: 200, outputTokens: 3, ms: 25 }, { type: "end" }],
+    ]);
+    const { events, emit } = collect();
+    await runAgent({ model, tools: [LOOKUP], messages: [{ role: "user", content: "q" }], emit, callTool: async () => ({ content: "{}", isError: false }) });
+    const turns = events.filter((e) => e.type === "turn") as Array<Extract<AgentEvent, { type: "turn" }>>;
+    expect(turns.map((t) => t.iteration)).toEqual([1, 2]);
+    expect(turns[0]!.messages).toEqual([{ role: "user", content: "q" }]);
+    expect(turns[1]!.messages.map((m) => m.role)).toEqual(["user", "assistant", "tool"]);
+    expect(turns[0]!.tools).toEqual([LOOKUP.name]);
+    expect(turns[0]!.usage).toEqual({ promptTokens: 120, outputTokens: 8, ms: 40 });
+    expect(turns[0]!.endedWith).toBe("tool_calls");
+    expect(turns[1]!.endedWith).toBe("text");
+    // the turn frame arrives AFTER that iteration's tokens/calls and BEFORE the next iteration begins
+    const kinds = events.map((e) => e.type);
+    expect(kinds.indexOf("turn")).toBeGreaterThan(kinds.indexOf("tool_call"));
+    expect(kinds.indexOf("turn")).toBeLessThan(kinds.indexOf("tool_result"));
   });
 
   it("a model that throws mid-turn ends with error + done(error)", async () => {
