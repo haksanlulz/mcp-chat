@@ -27,7 +27,7 @@ writeFileSync(cfg, JSON.stringify({
 
 const traceDir = join(dir, "traces");
 const env = { ...process.env, MCP_CHAT_CONFIG: cfg, MCP_CHAT_PORT: String(port), MCP_CHAT_TRACE: traceDir };
-delete env.ANTHROPIC_API_KEY; // provider choice is not under test; keep it Ollama so no key is ever read
+delete env.ANTHROPIC_API_KEY; delete env.OPENAI_BASE_URL; // provider choice is not under test; keep it Ollama so no key is ever read
 const runtime = spawn(process.execPath, ["--import", "tsx", join(here, "server", "index.ts")], { env, stdio: ["ignore", "ignore", "pipe"] });
 let stderr = "";
 runtime.stderr.on("data", (d) => { stderr += d; });

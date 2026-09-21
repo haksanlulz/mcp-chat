@@ -20,7 +20,7 @@ This is the part that makes it a testbed rather than a chat window. Press **debu
 
 Measured on `qwen3.6:35b-a3b` with thinking on, one housing question: turn 1 was 8,077 tokens in (28 tool schemas) and 272 out in 2.1 s and ended in a tool call; turn 2 was 31,364 in (the 100-row violations result) and 487 out in 13.7 s. The prompt cost of a verbose tool result is visible instead of guessed.
 
-What it is: a TypeScript runtime that spawns MCP servers over stdio, hands their tools to a model (Ollama locally, or the Anthropic API), runs the tool loop with every argument validated before any call, and streams tokens and tool calls over SSE to a React front end that renders each call as a card — arguments, result, and whether it failed. No framework on the server (`node:http` + SSE), no SDK for the providers (raw fetch), one runtime dependency: `@modelcontextprotocol/sdk`.
+What it is: a TypeScript runtime that spawns MCP servers over stdio, hands their tools to a model (Ollama locally, or the Anthropic API), runs the tool loop with every argument validated before any call, and streams tokens and tool calls over SSE to a React front end that renders each call as a card — arguments, result, and whether it failed. No framework on the server (`node:http` + SSE), no SDK for any of the three providers (raw fetch), one runtime dependency: `@modelcontextprotocol/sdk`.
 
 ![mcp-chat answering a housing question and a card question, each through a tool call rendered as a card](docs/screenshot.png)
 
@@ -35,12 +35,15 @@ npm run dev:server        # runtime on http://127.0.0.1:8731
 npm run dev:web           # UI on http://127.0.0.1:5173, proxies /api to the runtime
 ```
 
-Model selection, by environment:
+Model selection, by environment, first match wins:
 
 | env | provider |
 |---|---|
+| `OPENAI_BASE_URL` set | any **OpenAI-compatible** `/chat/completions` server — OpenRouter, LM Studio, llama.cpp `llama-server`, vLLM, LiteLLM, Ollama's own `/v1`; `OPENAI_MODEL`, `OPENAI_API_KEY` (omit for local servers) |
 | `ANTHROPIC_API_KEY` set | Anthropic Messages API; `ANTHROPIC_MODEL` (default `claude-sonnet-5`) |
-| otherwise | Ollama at `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`); `OLLAMA_MODEL` (default `qwen3-coder:30b`) |
+| otherwise | Ollama's native API at `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`); `OLLAMA_MODEL` (default `qwen3-coder:30b`) |
+
+Any model, then, as long as it sits behind one of those three wires and can call tools. A model without tool calling in its template gets the tools and cannot use them; it will just chat. The Ollama-native provider exists for its `think` field and per-frame timing; the same Ollama model over `OPENAI_BASE_URL=http://127.0.0.1:11434/v1` gave the same answer to the same question (123 open violations at 1520 Sedgwick, 16 A / 35 B / 72 C), which is the check that the two wires agree.
 
 `MCP_CHAT_PORT` (8731) and `MCP_CHAT_CONFIG` (path) override the defaults. The runtime binds 127.0.0.1 only.
 
@@ -74,7 +77,7 @@ Frames, in order per iteration: `thinking` · `token` · `tool_call` · `turn` (
 ## Testing
 
 ```
-npm test          # 62 tests, offline
+npm test          # 70 tests, offline
 npm run typecheck
 npm run smoke     # starts the real runtime against a fixture MCP server, hits every route, stops it by PID
 ```
@@ -82,6 +85,7 @@ npm run smoke     # starts the real runtime against a fixture MCP server, hits e
 | file | what it pins | channel |
 |---|---|---|
 | `test/agent.test.ts` | the loop's rules below; `thinking` never a token; a `turn` frame per iteration carrying what was sent | scripted model, in-process |
+| `test/openai.test.ts` | the OpenAI-compatible wire: tool-call fragments assembled by index, `reasoning_content` as thinking, usage via `stream_options`, `[DONE]`, transcript mapping with `tool_call_id`, malformed args handed to the validator | `fetch` stubbed with chunked streams |
 | `test/providers.test.ts` | Ollama NDJSON + Anthropic SSE parsing, transcript mapping, error frames, non-2xx; thinking on both providers, the Ollama think probe, usage/timing | `fetch` stubbed with chunked streams |
 | `test/mcp.test.ts` | server start/fail isolation, qualified names, `isError` pass-through | a **real MCP server over stdio** (`test/fixtures/echo-server.ts`) |
 | `test/api.test.ts` | `/api/chat` body: roles, caps, extra keys | pure |

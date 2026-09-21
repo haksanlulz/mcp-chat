@@ -6,9 +6,11 @@
  *   POST /api/chat     { messages } -> text/event-stream of AgentEvent frames
  *
  * Config: mcp-chat.config.json (see mcp-chat.config.example.json). Provider is
- * chosen by env: ANTHROPIC_API_KEY set -> Anthropic; otherwise Ollama at
- * OLLAMA_BASE_URL (default 127.0.0.1:11434) with OLLAMA_MODEL. MCP_CHAT_PORT
- * overrides 8731. Binds 127.0.0.1 only; this is a local tool.
+ * chosen by env, first match wins:
+ *   OPENAI_BASE_URL set    -> any OpenAI-compatible server (OPENAI_MODEL, OPENAI_API_KEY optional)
+ *   ANTHROPIC_API_KEY set  -> Anthropic (ANTHROPIC_MODEL)
+ *   otherwise              -> Ollama at OLLAMA_BASE_URL (default 127.0.0.1:11434) with OLLAMA_MODEL
+ * MCP_CHAT_PORT overrides 8731. Binds 127.0.0.1 only; this is a local tool.
  *
  * Debug surface (this is a testbed):
  *   MCP_CHAT_THINK=1              ask Ollama for the model's reasoning (probed; models without it fall back)
@@ -26,6 +28,7 @@ import { McpManager, type ServerConfig } from "./mcp.js";
 import { TraceStore } from "./trace.js";
 import { OllamaModel } from "./providers/ollama.js";
 import { AnthropicModel } from "./providers/anthropic.js";
+import { OpenAIModel } from "./providers/openai.js";
 
 type Config = { servers: ServerConfig[]; system?: string; maxIterations?: number };
 
@@ -40,6 +43,15 @@ function loadConfig(): Config {
 }
 
 function pickModel(cfg: Config): { model: Model; label: string } {
+  const oai = process.env.OPENAI_BASE_URL;
+  if (oai) {
+    const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+    const apiKey = process.env.OPENAI_API_KEY;
+    return {
+      model: new OpenAIModel({ baseUrl: oai, model, ...(apiKey ? { apiKey } : {}), ...(cfg.system ? { system: cfg.system } : {}) }),
+      label: `openai-compatible:${model} @ ${oai.replace(/^https?:\/\//, "")}`,
+    };
+  }
   const key = process.env.ANTHROPIC_API_KEY;
   if (key) {
     const model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5";
