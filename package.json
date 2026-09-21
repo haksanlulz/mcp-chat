@@ -1,7 +1,7 @@
 {
   "name": "@haksanlulz/mcp-chat",
   "version": "0.1.0",
-  "description": "Local-first chat UI for MCP servers: a TypeScript agent runtime that spawns MCP servers over stdio, runs the tool loop against a local (Ollama) or hosted (Anthropic) model, and streams tokens and tool calls to a React front end.",
+  "description": "Testbed for driving MCP servers the way a model does: a TypeScript tool loop over stdio servers, a local (Ollama) or hosted (Anthropic) model, and a React front end that shows every call and result. Not a chat product.",
   "private": true,
   "type": "module",
   "license": "MIT",

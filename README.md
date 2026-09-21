@@ -1,8 +1,16 @@
 # mcp-chat
 
-A local-first chat UI for MCP servers. A small TypeScript runtime spawns any MCP servers you list over stdio, hands their tools to a model (Ollama locally, or the Anthropic API), runs the tool loop, and streams tokens and tool calls to a React front end that renders every call as a card — arguments, result, and whether it failed.
+**A testbed, not a product.** I wrote this to drive my own MCP servers the way a model actually drives them — a small model, a real tool loop, every call and result on screen — because a test suite exercises a server the way its author imagined and a model does not. If you want to chat with MCP servers, use a real client (Claude Desktop, Cursor, any MCP host); this exists to watch what happens between the model and the server, and it is kept small enough to read in one sitting.
 
-No framework on the server (`node:http` + SSE), no SDK for the model providers (raw fetch), one runtime dependency: `@modelcontextprotocol/sdk`.
+What it found, in its first week, in servers that already had passing suites and had been through several review rounds:
+
+- `mcp-scryfall`: a card lookup returns one printing, and a model read the printing's set as where the card debuted. The server now says which printing it is, names the first printing, and carries every printing inline.
+- `mcp-nychousing`: a model with no borough guessed one, got a correct zero, and reported "no match" for a building that exists. The server now names the borough(s) where the address is registered and, when there is exactly one, returns that borough's numbers inline.
+- `mcp-nychousing` again: told "registered in BRONX, not BROOKLYN", the model narrated the Brooklyn zero as the Bronx answer. An instruction in a tool result is not an answer; a number is. That is why the inline numbers exist.
+
+None of those are bugs a unit test would write, because each one is a correct response read wrong by the thing that reads it.
+
+What it is: a TypeScript runtime that spawns MCP servers over stdio, hands their tools to a model (Ollama locally, or the Anthropic API), runs the tool loop with every argument validated before any call, and streams tokens and tool calls over SSE to a React front end that renders each call as a card — arguments, result, and whether it failed. No framework on the server (`node:http` + SSE), no SDK for the providers (raw fetch), one runtime dependency: `@modelcontextprotocol/sdk`.
 
 ![mcp-chat answering a housing question and a card question, each through a tool call rendered as a card](docs/screenshot.png)
 
@@ -92,7 +100,9 @@ Each has a test in `test/agent.test.ts`. The UI's own rules live in `test/web.te
 - **2026-09-18, screenshot above:** `npm test` 21/21 (12 loop + 9 web), typecheck clean. Two servers up (`housing` 10 tools, `cards` 7). Asked for 1520 Sedgwick Avenue's open HPD violations and registered owner: the model called `building_violations` then `who_owns`, both with the borough it inferred from the question, and answered 123 open with the registered owner and managing agent — figures that are the server's, not the model's. An earlier take of the same question broke the count down by class (16 A / 35 B / 72 C); the answer varies, the numbers do not.
 - **In the browser, two turns (2026-09-15):** asked about Lightning Bolt and a misspelled "Lightning Bolp" — the model called `card_named` for the first and chose `card_fuzzy` for the typo, both cards rendered green with server › tool and the arguments, and the answer quoted `{R}` / 3 damage and called the second a typo. A follow-up ("mana cost of Counterspell") called `card_named` again and answered `{U}{U}`. Enter-to-send verified with a dispatched `keydown` (the harness's synthetic Return key did not reach React; a real keyboard does).
 
-## Not yet
+## Not yet, and not planned
+
+This is a harness. It has what watching a server needs and nothing a product would.
 
 - Tool history is not round-tripped across requests; each `POST /api/chat` sends the human-readable transcript only.
-- No auth, no TLS, no remote MCP transports — local tool, local model, local servers.
+- No auth, no TLS, no remote MCP transports, no accounts, no persistence — local tool, local model, local servers, one tab.
