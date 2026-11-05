@@ -24,6 +24,8 @@ A change is DONE when:
 
 ## §3 Invariants
 
+Anthropic extended-thinking tool continuations must replay signed and redacted blocks in order without emitting opaque payloads in frames or sharing them across concurrent requests or other providers. `test/providers.test.ts` exercises two concurrent two-turn conversations and an adapter switch with stubbed provider responses; it does not substitute for a live Anthropic call. Schema checks support draft-07, 2019-09 and 2020-12; the deliberate simple-schema typo guard and unsupported-dialect failure are covered in `test/agent.test.ts`.
+
 | # | Invariant | Scan |
 |---|---|---|
 | I1 | No tool is invoked with arguments that fail its `inputSchema` | `test/agent.test.ts` "misspelled argument never reaches the tool" — red when `validateArgs` is bypassed (probed 2026-09-15) |
@@ -35,7 +37,7 @@ A change is DONE when:
 | I7 | The client can send only user/assistant turns; a `tool` role never reaches the model | `test/api.test.ts` "a client-supplied tool message is refused" — red when the role check is removed (probed 2026-09-19); `smoke.ts` asserts the 400 through the real socket |
 | I8 | Provider wire: split frames reassemble, tool inputs assemble, error frames throw, transcripts map | `test/providers.test.ts` — five probes red 2026-09-19: Ollama carry-over dropped, Ollama error swallowed, Anthropic `input_json_delta` not accumulated, tool results not folded into one user turn, Anthropic stream error ignored |
 | I9 | One MCP server failing to start never takes the runtime down; server `isError` passes through | `test/mcp.test.ts` over a REAL stdio server — red when the catch rethrows (beforeAll fails, 5 skipped) and when a missing-server call throws instead of returning `isError` (probed 2026-09-19) |
-| I11 | Thinking is its own frame and part: never a token, never re-sent, shown only under debug | `test/agent.test.ts` + `test/providers.test.ts` + `test/web.test.tsx` — probed 2026-09-20: agent forwards thinking as a token, Ollama emits it as content, Anthropic ignores `thinking_delta`, web renders it as answer text — each red |
+| I11 | Thinking is its own frame and part: never a token, shown only under debug; Anthropic's signed blocks are privately replayed on tool continuation | `test/agent.test.ts` + `test/providers.test.ts` + `test/web.test.tsx` — probed 2026-09-20: agent forwards thinking as a token, Ollama emits it as content, Anthropic ignores `thinking_delta`, web renders it as answer text — each red; continuation isolation is tested offline |
 | I12 | Every model iteration is accounted for: a `turn` frame with the messages SENT (a copy, not the mutated array), tools, usage, ending | probed: turn frame dropped (3 red), post-append transcript instead of the sent one, Ollama usage dropped, Anthropic `max_tokens` not raised past the thinking budget — each red |
 | I14 | The OpenAI-compatible wire assembles tool calls by index across fragments, keeps reasoning out of tokens, asks for usage, and hands malformed args to the validator instead of crashing | `test/openai.test.ts` — seven mutations red 2026-09-20: carry-over dropped, fragments not accumulated, index ignored, reasoning as tokens, `stream_options` dropped, malformed args thrown, `tool_call_id` blanked |
 | I13 | Traces are written per request, listed and read back, and an id can never name a file outside the trace dir | `smoke.ts` over the real socket: health reports traces, a 400 writes none, unknown id 404, `..%2F` id 404 |

@@ -18,6 +18,7 @@
 
 import Ajv from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
+import Ajv2019 from "ajv/dist/2019.js";
 import addFormats from "ajv-formats";
 
 export type JsonSchema = Record<string, unknown> & {
@@ -47,6 +48,8 @@ export type ModelEvent =
   /** The model's reasoning, when the provider exposes it. Never part of the answer. */
   | { type: "thinking"; text: string }
   | { type: "tool_call"; call: ToolCall }
+  /** Internal continuation data; never emitted to the client or trace. */
+  | { type: "provider_state"; state: unknown }
   /** Cost and timing for the turn, when the provider reports them. */
   | { type: "usage"; promptTokens?: number; outputTokens?: number; ms?: number }
   | { type: "end" };
@@ -57,6 +60,11 @@ export interface Model {
   /** One model turn. Yields tokens and tool calls, then `end`. */
   turn(messages: Message[], tools: ToolSpec[], signal?: AbortSignal): AsyncIterable<ModelEvent>;
 }
+
+// The assistant message is request-local. Weak keys keep provider data out of
+// serialized messages, traces and other adapters' wire formats.
+const providerStates = new WeakMap<Message, unknown>();
+export function providerState(message: Message): unknown { return providerStates.get(message); }
 
 export type ToolResult = { content: string; isError: boolean };
 export type CallTool = (call: ToolCall, signal?: AbortSignal) => Promise<ToolResult>;
@@ -135,7 +143,8 @@ export function validateArgs(tool: ToolSpec, args: unknown): string | null {
       const dialect = schema.$schema;
       const options = { strict: true, strictTypes: false, strictTuples: false, strictRequired: false, allowUnionTypes: true, allErrors: true };
       const ajv = dialect === "http://json-schema.org/draft-07/schema#" || dialect === "http://json-schema.org/draft-07/schema"
-        ? new Ajv(options) : new Ajv2020(options);
+        ? new Ajv(options) : dialect === "https://json-schema.org/draft/2019-09/schema" || dialect === "https://json-schema.org/draft/2019-09/schema#"
+        ? new Ajv2019(options) : new Ajv2020(options);
       addFormats(ajv);
       check = ajv.compile(schema);
       if ("$async" in check && check.$async) throw new Error("async schemas are not supported");
@@ -218,6 +227,7 @@ export async function runAgent(opts: RunOptions): Promise<AgentEvent[]> {
     let text = "";
     const calls: ToolCall[] = [];
     let usage: Usage = {};
+    let state: unknown;
     // a copy of what THIS turn was sent, taken before the loop appends to it
     const sent = messages.map((m) => ({ ...m }));
     const started = Date.now();
@@ -232,6 +242,8 @@ export async function runAgent(opts: RunOptions): Promise<AgentEvent[]> {
         } else if (ev.type === "tool_call") {
           calls.push(ev.call);
           out({ type: "tool_call", call: ev.call });
+        } else if (ev.type === "provider_state") {
+          state = ev.state;
         } else if (ev.type === "usage") {
           const { type: _t, ...u } = ev;
           usage = { ...usage, ...u };
@@ -248,7 +260,9 @@ export async function runAgent(opts: RunOptions): Promise<AgentEvent[]> {
       endedWith: calls.length ? "tool_calls" : text ? "text" : "empty", ms: Date.now() - started,
     });
 
-    messages.push(calls.length ? { role: "assistant", content: text, toolCalls: calls } : { role: "assistant", content: text });
+    const assistant: Message = calls.length ? { role: "assistant", content: text, toolCalls: calls } : { role: "assistant", content: text };
+    if (state !== undefined) providerStates.set(assistant, state);
+    messages.push(assistant);
     if (!calls.length) {
       out({ type: "done", iterations: iteration, stoppedBy: "answer" });
       return log;

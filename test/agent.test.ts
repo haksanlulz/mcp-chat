@@ -32,6 +32,14 @@ function collect() {
 }
 
 describe("validateArgs runs before any call", () => {
+  it("supports draft 2019-09 while retaining the documented top-level typo guard", () => {
+    const schema = { $schema: "https://json-schema.org/draft/2019-09/schema", type: "object", properties: { name: { type: "string" } } };
+    const tool = { name: "test", description: "", inputSchema: schema };
+    expect(validateArgs(tool, { name: "ok" })).toBeNull();
+    expect(validateArgs(tool, { name: "ok", extra: true })).toMatch(/does not accept/);
+    expect(validateArgs({ ...tool, inputSchema: { ...schema, additionalProperties: true } }, { name: "ok", extra: true })).toBeNull();
+    expect(validateArgs({ ...tool, inputSchema: { ...schema, $schema: "https://example.test/unsupported" } }, { name: "ok" })).toMatch(/cannot validate inputSchema/);
+  });
   it("names a missing required argument", () => {
     expect(validateArgs(LOOKUP, { street: "Sedgwick Avenue" })).toMatch(/missing required argument "house_number"/);
   });

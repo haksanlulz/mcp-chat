@@ -9,7 +9,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OllamaModel } from "../server/providers/ollama";
 import { AnthropicModel } from "../server/providers/anthropic";
-import type { Message, ModelEvent, ToolSpec } from "../server/agent";
+import { OpenAIModel } from "../server/providers/openai";
+import { runAgent, type Message, type ModelEvent, type ToolSpec } from "../server/agent";
 
 const TOOL: ToolSpec = { name: "housing__who_owns", description: "HPD registration", inputSchema: { type: "object", properties: { house_number: { type: "string" } }, required: ["house_number"] } };
 
@@ -130,6 +131,68 @@ describe("AnthropicModel", () => {
   const model = new AnthropicModel({ apiKey: "sk-test", model: "claude-test", baseUrl: "https://anthropic.test", system: "be careful" });
   const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   const finish = (reason = "end_turn") => sse("message_delta", { delta: { stop_reason: reason } }) + sse("message_stop", {});
+
+  it("replays ordered signed and redacted blocks only in their own concurrent tool continuation", async () => {
+    const requests: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      requests.push(body);
+      const question = body.messages[0].content;
+      if (body.messages.length > 1) return new Response(streamOf([finish()]));
+      const frames = [
+        sse("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }),
+        sse("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: `thought-${question}` } }),
+        sse("content_block_delta", { index: 0, delta: { type: "signature_delta", signature: `signature-${question}` } }),
+        sse("content_block_stop", { index: 0 }),
+        sse("content_block_start", { index: 1, content_block: { type: "redacted_thinking", data: `opaque-${question}` } }),
+        sse("content_block_stop", { index: 1 }),
+        sse("content_block_start", { index: 2, content_block: { type: "text", text: "" } }),
+        sse("content_block_delta", { index: 2, delta: { type: "text_delta", text: "Checking" } }),
+        sse("content_block_stop", { index: 2 }),
+        sse("content_block_start", { index: 3, content_block: { type: "tool_use", id: `id-${question}`, name: TOOL.name, input: {} } }),
+        sse("content_block_delta", { index: 3, delta: { type: "input_json_delta", partial_json: '{"house_number":"1"}' } }),
+        sse("content_block_stop", { index: 3 }), finish("tool_use"),
+      ];
+      return new Response(streamOf(frames));
+    }));
+    const shared = new AnthropicModel({ apiKey: "k", thinkingBudget: 2048 });
+    const logs = await Promise.all(["one", "two"].map((question) => runAgent({
+      model: shared, tools: [TOOL], messages: [{ role: "user", content: question }],
+      callTool: async () => ({ content: "ok", isError: false }), emit: () => {},
+    })));
+    for (const question of ["one", "two"]) {
+      const continuation = requests.find((r) => r.messages[0].content === question && r.messages.length > 1);
+      expect(continuation.messages[1].content).toEqual([
+        { type: "thinking", thinking: `thought-${question}`, signature: `signature-${question}` },
+        { type: "redacted_thinking", data: `opaque-${question}` },
+        { type: "text", text: "Checking" },
+        { type: "tool_use", id: `id-${question}`, name: TOOL.name, input: { house_number: "1" } },
+      ]);
+    }
+    const serialized = JSON.stringify(logs);
+    expect(serialized).not.toContain("signature-");
+    expect(serialized).not.toContain("opaque-");
+  });
+
+  it("does not send provider continuation state to another adapter", async () => {
+    let request = "";
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      request = String(init?.body);
+      return new Response(streamOf(['data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n']));
+    }));
+    const other = new OpenAIModel({ baseUrl: "http://unused", model: "test" });
+    let turn = 0;
+    const model = { async *turn(messages: Message[], tools: ToolSpec[]) {
+      if (turn++ === 0) {
+        yield { type: "provider_state" as const, state: { provider: "anthropic", blocks: [{ type: "redacted_thinking", data: "private-opaque" }] } };
+        yield { type: "tool_call" as const, call: { id: "1", name: TOOL.name, args: { house_number: "1" } } };
+        yield { type: "end" as const };
+      } else yield* other.turn(messages, tools);
+    } };
+    await runAgent({ model, tools: [TOOL], messages: [{ role: "user", content: "q" }], callTool: async () => ({ content: "ok", isError: false }), emit: () => {} });
+    expect(request).not.toContain("private-opaque");
+    expect(JSON.parse(request).messages[1].tool_calls[0].id).toBe("1");
+  });
 
   it("RED LEG: a tool_use block whose input streams in input_json_delta pieces becomes ONE tool_call with assembled args", async () => {
     const frames = [

@@ -9,6 +9,7 @@
  * at the MCP SDK alone (the same reason the operator's servers are stdio-only).
  */
 import type { Message, Model, ModelEvent, ToolSpec } from "../agent.js";
+import { providerState } from "../agent.js";
 import { readSse } from "./stream.js";
 
 export type AnthropicOptions = {
@@ -28,6 +29,8 @@ export type AnthropicOptions = {
 
 type Block =
   | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
 
@@ -80,6 +83,7 @@ export class AnthropicModel implements Model {
     }
     // One in-flight tool_use block at a time; its JSON input streams in pieces.
     let pending: { id: string; name: string; json: string } | null = null;
+    const blocks = new Map<number, Block>();
     let promptTokens: number | undefined;
     let outputTokens: number | undefined;
     let complete = false;
@@ -98,10 +102,17 @@ export class AnthropicModel implements Model {
           case "content_block_start": {
             const cb = data.content_block;
             if (cb?.type === "tool_use") pending = { id: cb.id, name: cb.name, json: "" };
+            if (cb && ["text", "thinking", "redacted_thinking", "tool_use"].includes(cb.type)) {
+              blocks.set(data.index, structuredClone(cb) as Block);
+            }
             break;
           }
           case "content_block_delta": {
             const d = data.delta;
+            const block = blocks.get(data.index);
+            if (block?.type === "text" && d?.type === "text_delta") block.text += d.text ?? "";
+            if (block?.type === "thinking" && d?.type === "thinking_delta") block.thinking += d.thinking ?? "";
+            if (block?.type === "thinking" && d?.type === "signature_delta") block.signature = (block.signature ?? "") + (d.signature ?? "");
             if (d?.type === "text_delta" && d.text) yield { type: "token", text: d.text };
             else if (d?.type === "thinking_delta" && d.thinking) yield { type: "thinking", text: d.thinking };
             else if (d?.type === "input_json_delta" && pending) pending.json += d.partial_json ?? "";
@@ -122,6 +133,8 @@ export class AnthropicModel implements Model {
               let argumentError: string | undefined;
               try { args = pending.json.trim() ? (JSON.parse(pending.json) as Record<string, unknown>) : {}; }
               catch { args = { _raw: pending.json }; argumentError = `${pending.name}: tool arguments are not valid JSON`; }
+              const block = blocks.get(data.index);
+              if (block?.type === "tool_use") block.input = args;
               yield { type: "tool_call", call: { id: pending.id, name: pending.name, args, ...(argumentError ? { argumentError } : {}) } };
               pending = null;
             }
@@ -139,6 +152,9 @@ export class AnthropicModel implements Model {
     } finally {
       clearTimeout(timer);
     }
+    if (finish === "tool_use" && [...blocks.values()].some((b) => b.type === "thinking" || b.type === "redacted_thinking")) {
+      yield { type: "provider_state", state: { provider: "anthropic", blocks: [...blocks.entries()].sort(([a], [b]) => a - b).map(([, b]) => b) } };
+    }
     yield { type: "usage", ...(promptTokens !== undefined ? { promptTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}), ms: Date.now() - started };
     yield { type: "end" };
   }
@@ -151,6 +167,11 @@ function toAnthropic(messages: Message[]): Array<{ role: "user" | "assistant"; c
     if (m.role === "user") {
       out.push({ role: "user", content: m.content });
     } else if (m.role === "assistant") {
+      const state = providerState(m) as { provider?: string; blocks?: Block[] } | undefined;
+      if (state?.provider === "anthropic" && state.blocks) {
+        out.push({ role: "assistant", content: state.blocks });
+        continue;
+      }
       const blocks: Block[] = [];
       if (m.content) blocks.push({ type: "text", text: m.content });
       for (const c of m.toolCalls ?? []) blocks.push({ type: "tool_use", id: c.id, name: c.name, input: c.args });
