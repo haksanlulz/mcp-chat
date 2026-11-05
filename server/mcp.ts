@@ -51,10 +51,15 @@ export class McpManager {
   async start(configs: ServerConfig[], opts: { timeoutMs?: number } = {}): Promise<ServerStatus[]> {
     const timeoutMs = opts.timeoutMs ?? 20_000;
     await Promise.all(configs.map(async (config) => {
-      if (!/^[a-z0-9_-]+$/i.test(config.name)) {
-        this.failed.set(config.name, `server name "${config.name}" must be [a-z0-9_-]`);
+      if (!/^[a-z0-9_-]+$/i.test(config.name) || config.name.includes(SEP) || config.name.endsWith("_")) {
+        this.failed.set(config.name, `server name "${config.name}" must be [a-z0-9_-] without a trailing underscore or __`);
         return;
       }
+      if (configs.filter(c => c.name === config.name).length > 1) {
+        this.failed.set(config.name, `Duplicate server name: ${config.name}`);
+        return;
+      }
+      const client = new Client({ name: "mcp-chat", version: "0.1.0" }, { capabilities: {} });
       try {
         const transport = new StdioClientTransport({
           command: config.command,
@@ -63,16 +68,27 @@ export class McpManager {
           ...(config.cwd ? { cwd: config.cwd } : {}),
           stderr: "pipe",
         });
-        const client = new Client({ name: "mcp-chat", version: "0.1.0" }, { capabilities: {} });
+        // Drain diagnostics so a verbose child cannot block on a full stderr pipe.
+        transport.stderr?.on('data', () => {});
         await withTimeout(client.connect(transport), timeoutMs, `connect to "${config.name}"`);
-        const listed = await withTimeout(client.listTools(), timeoutMs, `tools/list on "${config.name}"`);
-        const tools: ToolSpec[] = listed.tools.map((t) => ({
-          name: qualify(config.name, t.name),
-          description: t.description ?? "",
-          inputSchema: (t.inputSchema ?? { type: "object" }) as ToolSpec["inputSchema"],
-        }));
+        const tools: ToolSpec[] = [];
+        const names = new Set<string>();
+        const cursors = new Set<string>();
+        let cursor: string | undefined;
+        do {
+          const listed = await client.listTools(cursor ? { cursor } : {}, { timeout: timeoutMs });
+          for (const tool of listed.tools) {
+            if (names.has(tool.name)) throw new Error(`Duplicate tool name: ${tool.name}`);
+            names.add(tool.name);
+            tools.push({ name: qualify(config.name, tool.name), description: tool.description ?? "", inputSchema: tool.inputSchema as ToolSpec["inputSchema"] });
+          }
+          cursor = listed.nextCursor;
+          if (cursor && (cursors.has(cursor) || cursors.size >= 100)) throw new Error("Invalid or excessive tools/list pagination");
+          if (cursor) cursors.add(cursor);
+        } while (cursor);
         this.live.set(config.name, { config, client, tools });
       } catch (err) {
+        await client.close().catch(() => undefined);
         this.failed.set(config.name, err instanceof Error ? err.message : String(err));
       }
     }));
@@ -91,11 +107,11 @@ export class McpManager {
   }
 
   /** Execute one qualified call. Returns isError rather than throwing for anything the server reported. */
-  async call(call: ToolCall): Promise<ToolResult> {
+  async call(call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {
     const parts = split(call.name);
     const l = parts ? this.live.get(parts.server) : undefined;
     if (!parts || !l) return { content: `no running server for tool "${call.name}"`, isError: true };
-    const res = await l.client.callTool({ name: parts.tool, arguments: call.args });
+    const res = await l.client.callTool({ name: parts.tool, arguments: call.args }, undefined, signal ? { signal } : undefined);
     const content = (res.content as Array<{ type: string; text?: string }> | undefined ?? [])
       .map((c) => (c.type === "text" && typeof c.text === "string" ? c.text : `[${c.type}]`))
       .join("\n");

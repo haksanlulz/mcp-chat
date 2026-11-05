@@ -129,6 +129,7 @@ describe("OllamaModel", () => {
 describe("AnthropicModel", () => {
   const model = new AnthropicModel({ apiKey: "sk-test", model: "claude-test", baseUrl: "https://anthropic.test", system: "be careful" });
   const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  const finish = (reason = "end_turn") => sse("message_delta", { delta: { stop_reason: reason } }) + sse("message_stop", {});
 
   it("RED LEG: a tool_use block whose input streams in input_json_delta pieces becomes ONE tool_call with assembled args", async () => {
     const frames = [
@@ -156,7 +157,7 @@ describe("AnthropicModel", () => {
   });
 
   it("RED LEG: the request carries the key, version, system and tools, and folds consecutive tool results into ONE user turn with is_error preserved", async () => {
-    const cap = stubFetch(200, [sse("message_stop", {})]);
+    const cap = stubFetch(200, [finish()]);
     const history: Message[] = [
       { role: "user", content: "q" },
       { role: "assistant", content: "two calls", toolCalls: [{ id: "a", name: TOOL.name, args: { house_number: "1" } }, { id: "b", name: TOOL.name, args: { house_number: "2" } }] },
@@ -209,11 +210,11 @@ describe("AnthropicModel", () => {
   });
 
   it("RED LEG: the request asks for extended thinking only when a budget is set, and then max_tokens exceeds the budget", async () => {
-    const cap = stubFetch(200, [sse("message_stop", {})]);
+    const cap = stubFetch(200, [finish()]);
     await collect(new AnthropicModel({ apiKey: "k", baseUrl: "https://a.test", thinkingBudget: 4000 }).turn([{ role: "user", content: "q" }], []));
     expect(cap.body.thinking).toEqual({ type: "enabled", budget_tokens: 4000 });
     expect(cap.body.max_tokens).toBeGreaterThan(4000);
-    const cap2 = stubFetch(200, [sse("message_stop", {})]);
+    const cap2 = stubFetch(200, [finish()]);
     await collect(new AnthropicModel({ apiKey: "k", baseUrl: "https://a.test" }).turn([{ role: "user", content: "q" }], []));
     expect(cap2.body.thinking).toBeUndefined();
   });

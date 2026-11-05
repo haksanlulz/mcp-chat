@@ -10,17 +10,19 @@ What it found in its first week, in servers that already had passing suites and 
 
 None of those are bugs a unit test would write. Each is a correct response read wrong by the thing that reads it.
 
+**Reproduce the housing correction.** The [pinned regression tests](https://github.com/haksanlulz/mcp-nychousing/blob/b4e198c4e59317f932f6e1cd93d05881b6e2beef/test/server.test.ts#L705-L752) replay the Brooklyn lookup using synthetic NYC responses. They check the zero for Brooklyn, identify the Bronx registration, and verify the Bronx summary under the same open-violations filter. The [adapter change](https://github.com/haksanlulz/mcp-nychousing/commit/d8a07a20bc166fd1f57a51bb1070a203dce21a48) shows the implementation. The original model exchange is a historical observation; the screenshot below is a separate run with the borough supplied.
+
 ## What you can see
 
 This is what makes it a testbed instead of a chat window. Press **debug** in the header:
 
 - **thinking**: the model's reasoning, streamed as its own block above the calls it leads to, when the provider exposes it. Ollama: `MCP_CHAT_THINK=1` (probed once; a model without thinking, like `qwen3-coder`, is remembered and asked without it). Anthropic: `ANTHROPIC_THINKING_BUDGET=<tokens>`. Never merged into the answer.
-- **turn strips**: one per model iteration. Prompt tokens in, output tokens out, wall-clock ms, how it ended (`text` / `tool_calls` / `empty`). Expand one and you get the exact prompt the model was sent, message by message, plus the tool list. "Why did it guess Brooklyn" is answered here: you read what it saw.
+- **turn strips**: one per model iteration. Expand a strip to inspect the conversation messages, tool names, timing and any token counts supplied by the provider. The provider formats its own wire request, including system instructions and full tool schemas, separately.
 - **traces**: with `MCP_CHAT_TRACE=1` every request's frames go to `traces/<id>.jsonl` (gitignored, unredacted on purpose), the id comes back in an `x-mcp-chat-trace` header, and `GET /api/traces` / `GET /api/trace/:id` read them back. The turn footer links to the trace.
 
 Measured on `qwen3.6:35b-a3b` with thinking on, one housing question: turn 1 was 8,077 tokens in (28 tool schemas) and 272 out in 2.1 s and ended in a tool call; turn 2 was 31,364 in (the 100-row violations result) and 487 out in 13.7 s. You can see what a verbose tool result costs instead of guessing.
 
-What it is: a TypeScript runtime that spawns MCP servers over stdio, hands their tools to a model, runs the tool loop with every argument validated before any call, and streams tokens and tool calls over SSE to a React front end that renders each call as a card with its arguments, its result, and whether it failed. No framework on the server (`node:http` + SSE), no SDK for any of the three providers (raw fetch), one runtime dependency: `@modelcontextprotocol/sdk`.
+What it is: a TypeScript runtime that spawns MCP servers over stdio, hands their tools to a model, runs the tool loop with every argument validated before any call, and streams tokens and tool calls over SSE to a React front end that renders each call as a card with its arguments, its result, and whether it failed. The server uses Node HTTP and SSE, the MCP SDK for stdio, and raw fetch for model providers.
 
 ![mcp-chat answering a housing question and a card question, each through a tool call rendered as a card](docs/screenshot.png)
 
@@ -29,7 +31,7 @@ What it is: a TypeScript runtime that spawns MCP servers over stdio, hands their
 ## Run
 
 ```
-npm install
+npm ci                    # Node 22.12+ on the 22.x line, or supported Node 24/26+
 cp mcp-chat.config.example.json mcp-chat.config.json   # edit the servers list
 npm run dev:server        # runtime on http://127.0.0.1:8731
 npm run dev:web           # UI on http://127.0.0.1:5173, proxies /api to the runtime
@@ -45,7 +47,7 @@ Model selection, by environment, first match wins:
 
 So any model, as long as it sits behind one of those three wires and can call tools. A model without tool calling in its template gets the tools and can't use them; it'll just chat. The Ollama-native provider exists for its `think` field and per-frame timing. The same Ollama model over `OPENAI_BASE_URL=http://127.0.0.1:11434/v1` gave the same answer to the same question (123 open violations at 1520 Sedgwick, 16 A / 35 B / 72 C), which is the check that the two wires agree.
 
-`MCP_CHAT_PORT` (8731) and `MCP_CHAT_CONFIG` (path) override the defaults. The runtime binds 127.0.0.1 only.
+`MCP_CHAT_PORT` (8731) and `MCP_CHAT_CONFIG` (path) override the defaults. The runtime binds 127.0.0.1, checks the request host and browser origin, and accepts JSON chat bodies up to 8 MiB. Stop cancels pending local work and asks the provider or MCP server to cancel ongoing work; external work already performed cannot be rolled back.
 
 ## Config
 
@@ -77,7 +79,7 @@ Frames, in order per iteration: `thinking` · `token` · `tool_call` · `turn` (
 ## Testing
 
 ```
-npm test          # 70 tests, offline
+npm test          # offline loop, provider, MCP and UI tests
 npm run typecheck
 npm run smoke     # starts the real runtime against a fixture MCP server, hits every route, stops it by PID
 ```
@@ -92,7 +94,7 @@ npm run smoke     # starts the real runtime against a fixture MCP server, hits e
 | `test/web.test.tsx` | error card, cap note, no result-as-text, SSE reassembly, bold; debug view: thinking block, turn strips, prompt disclosure | `react-dom/server`, no browser |
 | `test/markdown.test.tsx` | the markdown subset: headings, nested lists, bold/italic nesting, code, links + bare-URL autolink, no HTML path, `javascript:` refused | `react-dom/server`, no browser |
 
-Every RED LEG test was shown to fail when its rule was removed before it was trusted (mutation-probed 2026-09-15, 09-18, 09-19, 09-20 ×2). CI runs all of it on Node 20 and 22.
+Every RED LEG test was shown to fail when its rule was removed before it was trusted (mutation-probed 2026-09-15, 09-18, 09-19, 09-20 ×2). CI targets Node 22.12 and 24.
 
 ## Rules the loop enforces
 
@@ -114,7 +116,7 @@ Each has a test in `test/agent.test.ts`. The UI's own rules live in `test/web.te
 - `npm test`: 12/12 on 09-15, 42/42 on 09-19; `npm run typecheck` clean; `vite build` 228 KB JS.
 - Runtime over a real server (`mcp-scryfall` via `tsx` over stdio): `/api/health` up with 7 tools, `/api/tools` lists them qualified, malformed `POST /api/chat` → 400.
 - **Full loop, local model:** `qwen3-coder:30b` was asked for Lightning Bolt's text and cost. It called `cards__card_named {"name":"Lightning Bolt"}`, the server answered, and the model wrote one sentence quoting the real Oracle text and `{R}`. 2 iterations, `stoppedBy: answer`, 27 tokens.
-- **2026-09-18, screenshot above:** `npm test` 21/21 (12 loop + 9 web), typecheck clean. Two servers up (`housing` 10 tools, `cards` 7). Asked for 1520 Sedgwick Avenue's open HPD violations and registered owner: the model called `building_violations` then `who_owns`, both with the borough it inferred from the question, and answered 123 open with the registered owner and managing agent. Those figures come from the server. An earlier take of the same question broke the count down by class (16 A / 35 B / 72 C); the wording varies between runs and the numbers hold.
+- **2026-09-18, screenshot above:** `npm test` 21/21 (12 loop + 9 web), typecheck clean. Two servers up (`housing` 10 tools, `cards` 7). Asked for 1520 Sedgwick Avenue's open HPD violations and registered owner: the model called `building_violations` then `who_owns`, using the Bronx borough supplied in the screenshot question, and answered 123 open with the registered owner and managing agent. Those figures come from the server. An earlier take of the same question broke the count down by class (16 A / 35 B / 72 C); the wording varies between runs and the numbers hold.
 - **In the browser, two turns (2026-09-15):** asked about Lightning Bolt and a misspelled "Lightning Bolp". The model called `card_named` for the first and chose `card_fuzzy` for the typo, both cards rendered green with server › tool and the arguments, and the answer quoted `{R}` / 3 damage and called the second a typo. A follow-up ("mana cost of Counterspell") called `card_named` again and answered `{U}{U}`. Enter-to-send verified with a dispatched `keydown` (the harness's synthetic Return key didn't reach React; a real keyboard does).
 
 ## Not yet, and not planned

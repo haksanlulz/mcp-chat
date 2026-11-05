@@ -17,7 +17,7 @@ export default defineConfig({
     // socket timeout closed those as "network error" in the UI while the same
     // request straight to :8731 completed (2026-09-20, 841 frames in 59 s).
     // No timeout on the proxied socket; the runtime owns the request's life.
-    proxy: { "/api": { target: "http://127.0.0.1:8731", timeout: 0, proxyTimeout: 0 } },
+    proxy: { "/api": { target: `http://127.0.0.1:${process.env.MCP_CHAT_PORT ?? 8731}`, changeOrigin: false, timeout: 0, proxyTimeout: 0 } },
   },
   build: { outDir: "../dist/web", emptyOutDir: true },
   test: {

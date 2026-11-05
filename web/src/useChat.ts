@@ -9,6 +9,7 @@
  * answer because it never arrives as one.
  */
 import { useCallback, useRef, useState } from "react";
+import { readSse } from "../../server/providers/stream.js";
 
 export type ToolCallView = {
   id: string;
@@ -66,13 +67,22 @@ export function useChat() {
   }, []);
 
   const send = useCallback(async (text: string) => {
-    if (busy || !text.trim()) return;
+    if (abortRef.current || busy || !text.trim()) return;
     const userTurn: Turn = { role: "user", text };
     const history = [...turns, userTurn];
     setTurns([...history, { role: "assistant", parts: [], errors: [], turns: [] }]);
     setBusy(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const patch = (fn: Parameters<typeof patchLast>[0]) => {
+      if (abortRef.current === ctrl) patchLast(fn);
+    };
+    const fail = (message: string) => patch((a) => {
+      a.errors.push(message);
+      a.stoppedBy = "error";
+      a.parts = a.parts.map((p) => p.kind === "tool" && p.call.status === "running"
+        ? { kind: "tool", call: { ...p.call, status: "error", result: message } } : p);
+    });
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -82,34 +92,36 @@ export function useChat() {
       });
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => "");
-        patchLast((a) => { a.errors.push(`HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`); a.stoppedBy = "error"; });
+        fail(`HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
         return;
       }
       const traceId = res.headers.get("x-mcp-chat-trace");
-      if (traceId) patchLast((a) => { a.traceId = traceId; });
-      for await (const frame of sse(res.body)) {
+      if (traceId) patch((a) => { a.traceId = traceId; });
+      let complete = false;
+      for await (const frame of sse(res.body, ctrl.signal)) {
+        if (complete) throw new Error("event received after done");
         const e = frame as { type: string; [k: string]: unknown };
         if (e.type === "token") {
-          patchLast((a) => {
+          patch((a) => {
             const last = a.parts[a.parts.length - 1];
             if (last && last.kind === "text") a.parts[a.parts.length - 1] = { kind: "text", text: last.text + String(e.text) };
             else a.parts.push({ kind: "text", text: String(e.text) });
           });
         } else if (e.type === "thinking") {
           // its own part kind: never merged into text, so it can never read as the answer
-          patchLast((a) => {
+          patch((a) => {
             const last = a.parts[a.parts.length - 1];
             if (last && last.kind === "thinking") a.parts[a.parts.length - 1] = { kind: "thinking", text: last.text + String(e.text) };
             else a.parts.push({ kind: "thinking", text: String(e.text) });
           });
         } else if (e.type === "turn") {
           const { type: _t, ...info } = e as unknown as { type: string } & TurnInfo;
-          patchLast((a) => a.turns.push(info));
+          patch((a) => a.turns.push(info));
         } else if (e.type === "tool_call") {
           const call = e.call as { id: string; name: string; args: Record<string, unknown> };
-          patchLast((a) => a.parts.push({ kind: "tool", call: { id: call.id, name: call.name, args: call.args, status: "running" } }));
+          patch((a) => a.parts.push({ kind: "tool", call: { id: call.id, name: call.name, args: call.args, status: "running" } }));
         } else if (e.type === "tool_result") {
-          patchLast((a) => {
+          patch((a) => {
             const i = a.parts.findIndex((p) => p.kind === "tool" && p.call.id === e.callId);
             if (i >= 0) {
               const p = a.parts[i] as { kind: "tool"; call: ToolCallView };
@@ -118,41 +130,33 @@ export function useChat() {
           });
         } else if (e.type === "error") {
           // Tool errors already show on their card; loop-level errors get a line.
-          if (!e.callId) patchLast((a) => a.errors.push(String(e.message)));
+          if (!e.callId) patch((a) => a.errors.push(String(e.message)));
         } else if (e.type === "done") {
-          patchLast((a) => { a.stoppedBy = e.stoppedBy as "answer" | "cap" | "error"; });
+          complete = true;
+          patch((a) => {
+            a.stoppedBy = e.stoppedBy as "answer" | "cap" | "error";
+            if (a.stoppedBy !== "answer") a.parts = a.parts.map((p) => p.kind === "tool" && p.call.status === "running"
+              ? { kind: "tool", call: { ...p.call, status: "error", result: "request ended before the tool returned" } } : p);
+          });
         }
       }
+      if (!complete) throw new Error("response stream ended before done");
     } catch (err) {
-      if ((err as { name?: string }).name !== "AbortError") {
-        patchLast((a) => { a.errors.push(err instanceof Error ? err.message : String(err)); a.stoppedBy = "error"; });
-      }
+      fail(ctrl.signal.aborted ? "request cancelled" : err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
-      abortRef.current = null;
+      if (abortRef.current === ctrl) {
+        setBusy(false);
+        abortRef.current = null;
+      }
     }
   }, [busy, turns, patchLast]);
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
-  const reset = useCallback(() => { abortRef.current?.abort(); setTurns([]); }, []);
+  const reset = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; setBusy(false); setTurns([]); }, []);
 
   return { turns, busy, send, stop, reset };
 }
 
-export async function* sse(body: ReadableStream<Uint8Array>): AsyncIterable<unknown> {
-  const reader = body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let sep: number;
-    while ((sep = buf.indexOf("\n\n")) >= 0) {
-      const chunk = buf.slice(0, sep);
-      buf = buf.slice(sep + 2);
-      const data = chunk.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
-      if (data) yield JSON.parse(data);
-    }
-  }
+export async function* sse(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncIterable<unknown> {
+  for await (const frame of readSse(body, signal)) yield JSON.parse(frame.data);
 }

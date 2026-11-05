@@ -15,7 +15,7 @@
  * Debug surface (this is a testbed):
  *   MCP_CHAT_THINK=1              ask Ollama for the model's reasoning (probed; models without it fall back)
  *   ANTHROPIC_THINKING_BUDGET=N   enable extended thinking on the Anthropic provider with an N-token budget
- *   MCP_CHAT_TRACE=1|<dir>        write every request's frames to traces/<id>.jsonl (default on under dev:server)
+ *   MCP_CHAT_TRACE=1|<dir>        enable writing request frames to traces/<id>.jsonl
  *   GET  /api/traces              list recent traces
  *   GET  /api/trace/:id           one trace's frames
  */
@@ -64,14 +64,31 @@ function pickModel(cfg: Config): { model: Model; label: string } {
   const model = process.env.OLLAMA_MODEL ?? "qwen3-coder:30b";
   const baseUrl = process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
   const think = process.env.MCP_CHAT_THINK === "1";
-  return { model: new OllamaModel({ model, baseUrl, think }), label: `ollama:${model}${think ? " (think)" : ""}` };
+  return { model: new OllamaModel({ model, baseUrl, think, ...(cfg.system ? { system: cfg.system } : {}) }), label: `ollama:${model}${think ? " (think)" : ""}` };
 }
 
+class BadRequest extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
 async function readJson(req: IncomingMessage): Promise<unknown> {
+  if (req.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+    throw new BadRequest(415, "Send the chat as application/json.");
+  }
+  if (Number(req.headers["content-length"]) > MAX_BODY_BYTES) throw new BadRequest(413, "Chat body exceeds 8 MiB.");
   const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
-  const text = Buffer.concat(chunks).toString("utf-8");
-  return text ? JSON.parse(text) : {};
+  let size = 0;
+  for await (const c of req.iterator({ destroyOnReturn: false })) {
+    size += c.length;
+    if (size > MAX_BODY_BYTES) {
+      req.resume();
+      throw new BadRequest(413, "Chat body exceeds 8 MiB.");
+    }
+    chunks.push(c);
+  }
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))); }
+  catch { throw new BadRequest(400, "Send valid UTF-8 JSON."); }
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -91,8 +108,16 @@ async function main(): Promise<void> {
 
   const port = Number(process.env.MCP_CHAT_PORT ?? 8731);
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
     try {
+      const host = req.headers.host ?? "";
+      if (!/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i.test(host)) {
+        return json(res, 403, { error: "Local host required." });
+      }
+      const origin = req.headers.origin;
+      if ((origin !== undefined && origin !== `http://${host}`) || req.headers["sec-fetch-site"] === "cross-site") {
+        return json(res, 403, { error: "Same-origin access required." });
+      }
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && url.pathname === "/api/health") {
         return json(res, 200, { ok: true, model: label, servers: mcp.status(), traces: traces.enabled });
       }
@@ -111,19 +136,23 @@ async function main(): Promise<void> {
         if (!parsed.ok) return json(res, 400, { error: parsed.error });
         const last = parsed.messages[parsed.messages.length - 1]!;
         const trace = traces.begin({ model: label, messages: parsed.messages.length, question: last.content.slice(0, 200) });
+        const controller = new AbortController();
+        res.once("close", () => { if (!res.writableEnded) controller.abort(); });
         res.writeHead(200, {
           "content-type": "text/event-stream",
           "cache-control": "no-cache",
           connection: "keep-alive",
           ...(trace ? { "x-mcp-chat-trace": trace.id } : {}),
         });
+        res.flushHeaders();
         const emit = (e: AgentEvent) => {
           trace?.write(e);
-          res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
+          if (!res.destroyed) res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
         };
         await runAgent({
           model, tools: mcp.tools(), messages: parsed.messages, emit,
-          callTool: (c) => mcp.call(c),
+          signal: controller.signal,
+          callTool: (c) => mcp.call(c, controller.signal),
           ...(cfg.maxIterations ? { maxIterations: cfg.maxIterations } : {}),
         });
         return res.end();
@@ -131,16 +160,20 @@ async function main(): Promise<void> {
       json(res, 404, { error: `no route ${req.method} ${url.pathname}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : `non-Error value (${typeof err})`;
+      if (res.destroyed) return;
       if (res.headersSent) {
         res.write(`event: error\ndata: ${JSON.stringify({ type: "error", message })}\n\n`);
         res.write(`event: done\ndata: ${JSON.stringify({ type: "done", iterations: 0, stoppedBy: "error" })}\n\n`);
         res.end();
       } else {
-        json(res, 500, { error: message });
+        json(res, err instanceof BadRequest ? err.status : 500, { error: message });
       }
     }
   });
-  server.listen(port, "127.0.0.1", () => console.error(`[mcp-chat] http://127.0.0.1:${port}`));
+  server.listen(port, "127.0.0.1", () => {
+    const address = server.address();
+    if (address && typeof address !== "string") console.error(`[mcp-chat] http://127.0.0.1:${address.port}`);
+  });
 
   const stop = async () => { await mcp.stop(); server.close(); process.exit(0); };
   process.on("SIGINT", stop);

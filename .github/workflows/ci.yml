@@ -18,10 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # package.json says >=20; vite 7 needs ^20.19 || >=22.12, so 20 here
-        # is the newest 20.x. tools/screenshot.mjs alone needs 22 (global
-        # WebSocket) and is not run in CI.
-        node: ["20", "22"]
+        # The locked Vitest and Vite releases share this minimum on Node 22.
+        node: ["22.12.0", "24"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

@@ -40,6 +40,7 @@ export function ToolCallCard({ call }: { call: ToolCallView }) {
 }
 
 function summarizeArgs(args: Record<string, unknown>): string {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return JSON.stringify(args) ?? "(missing arguments)";
   const parts = Object.entries(args).map(([k, v]) => `${k}=${typeof v === "string" ? JSON.stringify(v) : JSON.stringify(v)}`);
   const s = parts.join(" ");
   return s.length > 90 ? s.slice(0, 87) + "…" : s;

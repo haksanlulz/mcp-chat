@@ -31,6 +31,7 @@ async function collect(it: AsyncIterable<ModelEvent>): Promise<ModelEvent[]> {
 }
 const sse = (obj: unknown) => `data: ${JSON.stringify(obj)}\n\n`;
 const delta = (d: Record<string, unknown>, extra: Record<string, unknown> = {}) => sse({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta: d, finish_reason: null }], ...extra });
+const finish = (reason = "stop") => sse({ choices: [{ index: 0, delta: {}, finish_reason: reason }] }) + "data: [DONE]\n\n";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -38,7 +39,7 @@ describe("OpenAIModel", () => {
   const model = new OpenAIModel({ baseUrl: "http://o.test/v1", model: "m", apiKey: "k" });
 
   it("RED LEG: content deltas stream as tokens, split across chunks mid-frame, and [DONE] ends the turn", async () => {
-    const frames = delta({ role: "assistant", content: "Hel" }) + delta({ content: "lo" }) + "data: [DONE]\n\n";
+    const frames = delta({ role: "assistant", content: "Hel" }) + delta({ content: "lo" }) + finish();
     const cut = frames.indexOf("lo") + 1;
     stubFetch(200, [frames.slice(0, cut), frames.slice(cut)]);
     const ev = await collect(model.turn([{ role: "user", content: "hi" }], []));
@@ -51,8 +52,7 @@ describe("OpenAIModel", () => {
       delta({ tool_calls: [{ index: 0, function: { arguments: '{"house_' } }] }) +
       delta({ tool_calls: [{ index: 0, function: { arguments: 'number": "15' } }] }) +
       delta({ tool_calls: [{ index: 0, function: { arguments: '20"}' } }] }) +
-      sse({ id: "x", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) +
-      "data: [DONE]\n\n";
+      finish("tool_calls");
     stubFetch(200, [frames]);
     const ev = await collect(model.turn([{ role: "user", content: "who owns 1520" }], [TOOL]));
     expect(ev.filter((e) => e.type === "tool_call")).toEqual([{ type: "tool_call", call: { id: "call_1", name: "housing__who_owns", args: { house_number: "1520" } } }]);
@@ -64,7 +64,7 @@ describe("OpenAIModel", () => {
       delta({ tool_calls: [{ index: 0, id: "a", function: { name: "housing__who_owns", arguments: "" } }, { index: 1, id: "b", function: { name: "housing__who_owns", arguments: "" } }] }) +
       delta({ tool_calls: [{ index: 0, function: { arguments: '{"house_number":"1"}' } }] }) +
       delta({ tool_calls: [{ index: 1, function: { arguments: '{"house_number":"2"}' } }] }) +
-      "data: [DONE]\n\n";
+      finish("tool_calls");
     stubFetch(200, [frames]);
     const ev = await collect(model.turn([{ role: "user", content: "q" }], [TOOL]));
     expect(ev.filter((e) => e.type === "tool_call").map((e) => (e as any).call)).toEqual([
@@ -74,7 +74,7 @@ describe("OpenAIModel", () => {
   });
 
   it("RED LEG: reasoning_content (and reasoning) deltas stream as thinking frames, never tokens", async () => {
-    const frames = delta({ reasoning_content: "need the " }) + delta({ reasoning: "tool" }) + delta({ content: "ok" }) + "data: [DONE]\n\n";
+    const frames = delta({ reasoning_content: "need the " }) + delta({ reasoning: "tool" }) + delta({ content: "ok" }) + finish();
     stubFetch(200, [frames]);
     const ev = await collect(model.turn([{ role: "user", content: "q" }], []));
     expect(ev.filter((e) => e.type === "thinking").map((e) => (e as any).text)).toEqual(["need the ", "tool"]);
@@ -82,14 +82,14 @@ describe("OpenAIModel", () => {
   });
 
   it("RED LEG: usage on the final chunk becomes a usage event, and stream_options asks for it", async () => {
-    const cap = stubFetch(200, [delta({ content: "x" }) + sse({ id: "x", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: 321, completion_tokens: 7 } }) + "data: [DONE]\n\n"]);
+    const cap = stubFetch(200, [delta({ content: "x" }) + sse({ id: "x", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: 321, completion_tokens: 7 } }) + finish()]);
     const ev = await collect(model.turn([{ role: "user", content: "q" }], []));
     expect(ev.find((e) => e.type === "usage")).toMatchObject({ promptTokens: 321, outputTokens: 7 });
     expect(cap.body.stream_options).toEqual({ include_usage: true });
   });
 
   it("RED LEG: the request carries the key, model, tools, and the transcript in the wire's shape — tool results as role tool with tool_call_id", async () => {
-    const cap = stubFetch(200, ["data: [DONE]\n\n"]);
+    const cap = stubFetch(200, [finish()]);
     const history: Message[] = [
       { role: "user", content: "q" },
       { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: TOOL.name, args: { house_number: "1520" } }] },
@@ -110,7 +110,7 @@ describe("OpenAIModel", () => {
   });
 
   it("no key means no authorization header (local servers), and a non-2xx throws with the body", async () => {
-    const cap = stubFetch(200, ["data: [DONE]\n\n"]);
+    const cap = stubFetch(200, [finish()]);
     await collect(new OpenAIModel({ baseUrl: "http://o.test/v1", model: "m" }).turn([{ role: "user", content: "q" }], []));
     expect((cap.init!.headers as Record<string, string>).authorization).toBeUndefined();
     stubFetch(401, ['{"error":{"message":"bad key"}}']);
@@ -118,7 +118,7 @@ describe("OpenAIModel", () => {
   });
 
   it("RED LEG: malformed tool arguments are surfaced as a tool_call with the raw string, so the loop's validator rejects it loudly instead of the turn crashing", async () => {
-    const frames = delta({ tool_calls: [{ index: 0, id: "c", function: { name: "housing__who_owns", arguments: "{not json" } }] }) + "data: [DONE]\n\n";
+    const frames = delta({ tool_calls: [{ index: 0, id: "c", function: { name: "housing__who_owns", arguments: "{not json" } }] }) + finish("tool_calls");
     stubFetch(200, [frames]);
     const ev = await collect(model.turn([{ role: "user", content: "q" }], [TOOL]));
     const call = (ev.find((e) => e.type === "tool_call") as any).call;

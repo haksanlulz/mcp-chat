@@ -17,6 +17,7 @@
  * No SDK, same as the other two providers.
  */
 import type { Message, Model, ModelEvent, ToolSpec } from "../agent.js";
+import { readSse } from "./stream.js";
 
 export type OpenAIOptions = {
   baseUrl: string;      // e.g. https://openrouter.ai/api/v1 or http://127.0.0.1:8080/v1
@@ -40,7 +41,8 @@ export class OpenAIModel implements Model {
     this.base = opts.baseUrl.replace(/\/+$/, "");
   }
 
-  async *turn(messages: Message[], tools: ToolSpec[]): AsyncIterable<ModelEvent> {
+  async *turn(messages: Message[], tools: ToolSpec[], signal?: AbortSignal): AsyncIterable<ModelEvent> {
+    signal?.throwIfAborted();
     const body = {
       model: this.opts.model,
       stream: true,
@@ -53,17 +55,19 @@ export class OpenAIModel implements Model {
     if (this.opts.apiKey) headers.authorization = `Bearer ${this.opts.apiKey}`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.opts.timeoutMs ?? 120_000);
+    const requestSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
     const started = Date.now();
     let res: Response;
     try {
-      res = await fetch(`${this.base}/chat/completions`, { method: "POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
+      res = await fetch(`${this.base}/chat/completions`, { method: "POST", headers, body: JSON.stringify(body), signal: requestSignal });
     } catch (err) {
       clearTimeout(timer);
       throw new Error(`OpenAI-compatible endpoint unreachable at ${this.base}: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (!res.ok || !res.body) {
-      clearTimeout(timer);
-      const text = await res.text().catch(() => "");
+      let text: string;
+      try { text = await res.text().catch(() => ""); }
+      finally { clearTimeout(timer); }
       throw new Error(`${this.base}/chat/completions returned HTTP ${res.status}${text ? `: ${text.slice(0, 300)}` : ""}`);
     }
 
@@ -71,9 +75,11 @@ export class OpenAIModel implements Model {
     const pending = new Map<number, { id: string; name: string; args: string }>();
     let promptTokens: number | undefined;
     let outputTokens: number | undefined;
+    let complete = false;
+    let finish: string | undefined;
     try {
-      for await (const data of sse(res.body)) {
-        if (data === "[DONE]") break;
+      for await (const { data } of readSse(res.body, requestSignal)) {
+        if (data === "[DONE]") { complete = true; break; }
         let chunk: any;
         try { chunk = JSON.parse(data); }
         catch { throw new Error(`OpenAI-compatible stream sent a non-JSON frame: ${data.slice(0, 120)}`); }
@@ -83,7 +89,12 @@ export class OpenAIModel implements Model {
           if (typeof u.prompt_tokens === "number") promptTokens = u.prompt_tokens;
           if (typeof u.completion_tokens === "number") outputTokens = u.completion_tokens;
         }
-        const d = chunk.choices?.[0]?.delta;
+        const choice = chunk.choices?.[0];
+        if (choice?.finish_reason != null) {
+          finish = choice.finish_reason;
+          if (finish !== "stop" && finish !== "tool_calls") throw new Error(`OpenAI-compatible turn stopped with ${finish}`);
+        }
+        const d = choice?.delta;
         if (!d) continue;
         const reasoning = d.reasoning_content ?? d.reasoning;
         if (typeof reasoning === "string" && reasoning) yield { type: "thinking", text: reasoning };
@@ -97,6 +108,8 @@ export class OpenAIModel implements Model {
           pending.set(i, cur);
         }
       }
+      if (!complete || !finish) throw new Error("OpenAI-compatible stream ended before its terminal finish and [DONE]");
+      if ((finish === "tool_calls") !== (pending.size > 0)) throw new Error("OpenAI-compatible finish reason disagrees with tool calls");
     } finally {
       clearTimeout(timer);
     }
@@ -104,9 +117,10 @@ export class OpenAIModel implements Model {
       // Malformed JSON is handed to the loop as {_raw}, so its validator
       // rejects the call with a message the model can read; never a crash.
       let args: Record<string, unknown>;
-      try { args = c.args.trim() ? (JSON.parse(c.args) as Record<string, unknown>) : {}; }
-      catch { args = { _raw: c.args }; }
-      yield { type: "tool_call", call: { id: c.id || `oai-${started}-${i}`, name: c.name, args } };
+      let argumentError: string | undefined;
+      try { args = JSON.parse(c.args) as Record<string, unknown>; }
+      catch { args = { _raw: c.args }; argumentError = `${c.name}: tool arguments are not valid JSON`; }
+      yield { type: "tool_call", call: { id: c.id || `oai-${started}-${i}`, name: c.name, args, ...(argumentError ? { argumentError } : {}) } };
     }
     yield { type: "usage", ...(promptTokens !== undefined ? { promptTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}), ms: Date.now() - started };
     yield { type: "end" };
@@ -124,23 +138,4 @@ function toWire(messages: Message[], system?: string): WireMsg[] {
     } else out.push({ role: "tool", tool_call_id: m.toolCallId, content: m.content });
   }
   return out;
-}
-
-/** SSE `data:` payloads, frames reassembled across chunk boundaries. */
-async function* sse(body: ReadableStream<Uint8Array>): AsyncIterable<string> {
-  const reader = body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let sep: number;
-    while ((sep = buf.indexOf("\n\n")) >= 0) {
-      const chunk = buf.slice(0, sep);
-      buf = buf.slice(sep + 2);
-      const datas = chunk.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim());
-      if (datas.length) yield datas.join("\n");
-    }
-  }
 }

@@ -27,6 +27,11 @@ function answerText(html: string): string {
 }
 
 describe("ToolCallCard", () => {
+  it.each([null, [], 17, "bad"])("renders malformed argument shapes without crashing: %j", (args) => {
+    const html = renderToStaticMarkup(<ToolCallCard call={{ ...FAILED, args: args as unknown as Record<string, unknown> }} />);
+    expect(html).toContain('class="tool tool--error"');
+    expect(html).toContain("Tool call failed");
+  });
   it("RED LEG: a failed call renders as an error card that says it is not an answer", () => {
     const html = renderToStaticMarkup(<ToolCallCard call={FAILED} />);
     expect(html).toContain('class="tool tool--error"');

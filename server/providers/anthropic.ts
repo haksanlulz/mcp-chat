@@ -9,6 +9,7 @@
  * at the MCP SDK alone (the same reason the operator's servers are stdio-only).
  */
 import type { Message, Model, ModelEvent, ToolSpec } from "../agent.js";
+import { readSse } from "./stream.js";
 
 export type AnthropicOptions = {
   apiKey: string;
@@ -37,7 +38,8 @@ export class AnthropicModel implements Model {
     this.base = (opts.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
   }
 
-  async *turn(messages: Message[], tools: ToolSpec[]): AsyncIterable<ModelEvent> {
+  async *turn(messages: Message[], tools: ToolSpec[], signal?: AbortSignal): AsyncIterable<ModelEvent> {
+    signal?.throwIfAborted();
     const budget = this.opts.thinkingBudget;
     const maxTokens = this.opts.maxTokens ?? 2048;
     const body = {
@@ -52,6 +54,7 @@ export class AnthropicModel implements Model {
     };
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.opts.timeoutMs ?? 120_000);
+    const requestSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
     const started = Date.now();
     let res: Response;
     try {
@@ -63,24 +66,29 @@ export class AnthropicModel implements Model {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify(body),
-        signal: ctrl.signal,
+        signal: requestSignal,
       });
     } catch (err) {
       clearTimeout(timer);
       throw new Error(`Anthropic API unreachable: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (!res.ok || !res.body) {
-      clearTimeout(timer);
-      const text = await res.text().catch(() => "");
+      let text: string;
+      try { text = await res.text().catch(() => ""); }
+      finally { clearTimeout(timer); }
       throw new Error(`Anthropic /v1/messages returned HTTP ${res.status}${text ? `: ${text.slice(0, 300)}` : ""}`);
     }
     // One in-flight tool_use block at a time; its JSON input streams in pieces.
     let pending: { id: string; name: string; json: string } | null = null;
     let promptTokens: number | undefined;
     let outputTokens: number | undefined;
+    let complete = false;
+    let finish: string | undefined;
     try {
-      for await (const ev of sse(res.body)) {
-        const data = ev.data as Record<string, any>;
+      for await (const ev of readSse(res.body, requestSignal)) {
+        let data: Record<string, any>;
+        try { data = JSON.parse(ev.data); }
+        catch { throw new Error(`Anthropic sent a non-JSON SSE frame (${ev.event}): ${ev.data.slice(0, 120)}`); }
         switch (ev.event) {
           case "message_start": {
             const u = data.message?.usage;
@@ -100,6 +108,10 @@ export class AnthropicModel implements Model {
             break;
           }
           case "message_delta": {
+            if (data.delta?.stop_reason != null) {
+              finish = data.delta.stop_reason;
+              if (!["end_turn", "tool_use", "stop_sequence"].includes(finish!)) throw new Error(`Anthropic turn stopped with ${finish}`);
+            }
             const u = data.usage;
             if (typeof u?.output_tokens === "number") outputTokens = u.output_tokens;
             break;
@@ -107,9 +119,10 @@ export class AnthropicModel implements Model {
           case "content_block_stop": {
             if (pending) {
               let args: Record<string, unknown> = {};
+              let argumentError: string | undefined;
               try { args = pending.json.trim() ? (JSON.parse(pending.json) as Record<string, unknown>) : {}; }
-              catch { throw new Error(`Anthropic streamed non-JSON tool input for ${pending.name}: ${pending.json.slice(0, 120)}`); }
-              yield { type: "tool_call", call: { id: pending.id, name: pending.name, args } };
+              catch { args = { _raw: pending.json }; argumentError = `${pending.name}: tool arguments are not valid JSON`; }
+              yield { type: "tool_call", call: { id: pending.id, name: pending.name, args, ...(argumentError ? { argumentError } : {}) } };
               pending = null;
             }
             break;
@@ -117,9 +130,12 @@ export class AnthropicModel implements Model {
           case "error":
             throw new Error(`Anthropic stream error: ${JSON.stringify(data.error ?? data).slice(0, 300)}`);
           case "message_stop":
+            complete = true;
             break;
         }
+        if (complete) break;
       }
+      if (!complete || !finish || pending) throw new Error("Anthropic stream ended before its terminal stop reason and message_stop");
     } finally {
       clearTimeout(timer);
     }
@@ -147,30 +163,4 @@ function toAnthropic(messages: Message[]): Array<{ role: "user" | "assistant"; c
     }
   }
   return out;
-}
-
-async function* sse(body: ReadableStream<Uint8Array>): AsyncIterable<{ event: string; data: unknown }> {
-  const reader = body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let sep: number;
-    while ((sep = buf.indexOf("\n\n")) >= 0) {
-      const chunk = buf.slice(0, sep);
-      buf = buf.slice(sep + 2);
-      let event = "message";
-      const datas: string[] = [];
-      for (const line of chunk.split("\n")) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) datas.push(line.slice(5).trim());
-      }
-      if (!datas.length) continue;
-      const raw = datas.join("\n");
-      try { yield { event, data: JSON.parse(raw) }; }
-      catch { throw new Error(`Anthropic sent a non-JSON SSE frame (${event}): ${raw.slice(0, 120)}`); }
-    }
-  }
 }

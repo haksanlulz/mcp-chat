@@ -9,7 +9,7 @@
     "name": "Abishai James"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
     "dev:server": "tsx watch server/index.ts",
@@ -23,7 +23,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

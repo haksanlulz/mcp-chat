@@ -13,6 +13,7 @@ export type OllamaOptions = {
   baseUrl?: string;   // default http://127.0.0.1:11434
   model: string;      // e.g. "qwen3-coder:30b"
   timeoutMs?: number; // per-turn wall clock; default 120 s
+  system?: string;
   /**
    * Ask for the model's reasoning (`think: true`). Only some models have it;
    * Ollama answers `"<model>" does not support thinking` with a 400 for the
@@ -36,30 +37,35 @@ export class OllamaModel implements Model {
     if (!opts.think) this.thinkingSupported = false;
   }
 
-  async *turn(messages: Message[], tools: ToolSpec[]): AsyncIterable<ModelEvent> {
+  async *turn(messages: Message[], tools: ToolSpec[], signal?: AbortSignal): AsyncIterable<ModelEvent> {
+    signal?.throwIfAborted();
     const wantThink = this.opts.think === true && this.thinkingSupported !== false;
-    let res = await this.request(messages, tools, wantThink);
+    let res = await this.request(messages, tools, wantThink, signal);
     if (wantThink && res.status === 400 && this.thinkingSupported === null) {
       // the probe: a model without thinking says so; remember and go again without it
-      const text = await res.body.text().catch(() => "");
+      let text: string;
+      try { text = await res.body.text(); }
+      finally { clearTimeout(res.timer); }
       if (/does not support thinking/i.test(text)) {
         this.thinkingSupported = false;
-        res = await this.request(messages, tools, false);
+        res = await this.request(messages, tools, false, signal);
       } else {
         throw new Error(`Ollama /api/chat returned HTTP 400${text ? `: ${text.slice(0, 200)}` : ""}`);
       }
     } else if (wantThink && res.status === 200) {
       this.thinkingSupported = true;
     }
-    const { body, timer, started } = res;
+    const { body, timer, started, requestSignal } = res;
     if (res.status !== 200 || !body.body) {
-      clearTimeout(timer);
-      const text = await body.text().catch(() => "");
+      let text: string;
+      try { text = await body.text().catch(() => ""); }
+      finally { clearTimeout(timer); }
       throw new Error(`Ollama /api/chat returned HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
     }
     try {
       let n = 0;
-      for await (const frame of ndjson(body.body)) {
+      let complete = false;
+      for await (const frame of ndjson(body.body, requestSignal)) {
         const msg = frame.message as { content?: string; thinking?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> } | undefined;
         if (msg?.thinking) yield { type: "thinking", text: msg.thinking };
         if (msg?.content) yield { type: "token", text: msg.content };
@@ -69,6 +75,8 @@ export class OllamaModel implements Model {
         }
         if (frame.error) throw new Error(`Ollama: ${String(frame.error)}`);
         if (frame.done === true) {
+          if (frame.done_reason != null && frame.done_reason !== "stop") throw new Error(`Ollama turn stopped with ${String(frame.done_reason)}`);
+          complete = true;
           // the final frame carries Ollama's own accounting; total_duration is nanoseconds
           const usage: Extract<ModelEvent, { type: "usage" }> = { type: "usage" };
           if (typeof frame.prompt_eval_count === "number") usage.promptTokens = frame.prompt_eval_count;
@@ -78,31 +86,34 @@ export class OllamaModel implements Model {
           break;
         }
       }
+      if (!complete) throw new Error("Ollama stream ended before done:true");
     } finally {
       clearTimeout(timer);
     }
     yield { type: "end" };
   }
 
-  private async request(messages: Message[], tools: ToolSpec[], think: boolean): Promise<{ status: number; body: Response; timer: ReturnType<typeof setTimeout>; started: number }> {
+  private async request(messages: Message[], tools: ToolSpec[], think: boolean, signal?: AbortSignal): Promise<{ status: number; body: Response; timer: ReturnType<typeof setTimeout>; started: number; requestSignal: AbortSignal }> {
+    signal?.throwIfAborted();
     const body = {
       model: this.opts.model,
       stream: true,
       ...(think ? { think: true } : {}),
-      messages: messages.map(toOllama),
+      messages: [...(this.opts.system ? [{ role: "system", content: this.opts.system }] : []), ...messages.map(toOllama)],
       tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
     };
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.opts.timeoutMs ?? 120_000);
+    const requestSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
     const started = Date.now();
     try {
       const res = await fetch(`${this.base}/api/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
-        signal: ctrl.signal,
+        signal: requestSignal,
       });
-      return { status: res.status, body: res, timer, started };
+      return { status: res.status, body: res, timer, started, requestSignal };
     } catch (err) {
       clearTimeout(timer);
       throw new Error(`Ollama unreachable at ${this.base}: ${err instanceof Error ? err.message : String(err)}`);
@@ -118,12 +129,17 @@ function toOllama(m: Message): OllamaMsg {
   return out;
 }
 
-async function* ndjson(body: ReadableStream<Uint8Array>): AsyncIterable<Record<string, unknown>> {
+async function* ndjson(body: ReadableStream<Uint8Array>, signal: AbortSignal): AsyncIterable<Record<string, unknown>> {
   const reader = body.getReader();
   const dec = new TextDecoder();
   let buf = "";
+  const abort = () => { void reader.cancel(signal.reason).catch(() => undefined); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
   for (;;) {
+    signal.throwIfAborted();
     const { value, done } = await reader.read();
+    signal.throwIfAborted();
     if (done) break;
     buf += dec.decode(value, { stream: true });
     let nl: number;
@@ -138,5 +154,10 @@ async function* ndjson(body: ReadableStream<Uint8Array>): AsyncIterable<Record<s
   if (buf.trim()) {
     try { yield JSON.parse(buf) as Record<string, unknown>; }
     catch { throw new Error(`Ollama sent a truncated frame: ${buf.slice(0, 120)}`); }
+  }
+  } finally {
+    signal.removeEventListener("abort", abort);
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }

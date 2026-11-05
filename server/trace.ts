@@ -2,12 +2,11 @@
  * Request traces: every frame of every /api/chat request, as JSONL, one file
  * per request under the trace directory. This is the testbed's log — the
  * thing to open when a model did something odd. Each line is a frame with a
- * timestamp; the `turn` frames carry the full prompt the model was sent, so
- * "why did it guess Brooklyn" is answerable from the file alone.
+ * timestamp; the `turn` frames contain the loop's conversation and tool
+ * names. Provider-specific instructions and serialized schemas are separate.
  *
- * Off by default outside dev; on with MCP_CHAT_TRACE=1 (or a directory path).
- * Files are plain JSON; nothing is redacted, because the whole point is to see
- * exactly what went over the wire — keep the directory out of git (it is).
+ * Off by default. Enable with MCP_CHAT_TRACE=1 (or a directory path).
+ * Trace frames contain unredacted conversation and tool results.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";

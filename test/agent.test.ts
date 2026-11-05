@@ -46,6 +46,110 @@ describe("validateArgs runs before any call", () => {
   });
 });
 
+describe("JSON Schema argument boundary", () => {
+  const tool: ToolSpec = {
+    name: "fx__schema", description: "schema probe",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        borough: { type: "string", enum: ["BRONX"] },
+        limit: { type: "integer", minimum: 1, maximum: 3 },
+        nested: { type: "object", properties: { key: { type: "string" } }, required: ["key"], additionalProperties: false },
+        values: { type: "array", items: { type: "integer" }, minItems: 1 },
+      }, required: ["borough"],
+    },
+  };
+  const badArgs = [null, [], 17, "text", { borough: "BROOKLYN" }, { borough: "BRONX", limit: -9 },
+    { borough: "BRONX", nested: { typo: "x" } }, { borough: "BRONX", values: ["wrong"] }];
+  it.each(badArgs)("refuses malformed or schema-invalid arguments before invocation: %j", async (args) => {
+    const model = scripted([[{ type: "tool_call", call: { id: "invalid", name: tool.name, args: args as Record<string, unknown> } }, { type: "end" }], [{ type: "end" }]]);
+    let invoked = 0;
+    const frames = await runAgent({ model, tools: [tool], messages: [{ role: "user", content: "probe" }], emit() {}, callTool: async () => { invoked++; return { content: "wrong", isError: false }; } });
+    expect(invoked).toBe(0);
+    expect(frames.find((e) => e.type === "tool_result")).toMatchObject({ isError: true });
+    expect(frames.at(-1)).toMatchObject({ type: "done" });
+    expect(frames.filter((e) => e.type === "done")).toHaveLength(1);
+  });
+
+  it("supports local refs, unions, pattern properties, schema-valued extras and composition without flattening them", () => {
+    const spec: ToolSpec = { name: "fx__rich", description: "", inputSchema: {
+      type: "object", $defs: { value: { type: ["string", "null"], pattern: "^ok" } },
+      properties: { primary: { $ref: "#/$defs/value" } }, patternProperties: { "^extra_": { type: "integer" } },
+      additionalProperties: { type: "boolean" }, anyOf: [{ required: ["primary"] }, { required: ["extra_one"] }],
+    } };
+    expect(validateArgs(spec, { primary: "okay", extra_one: 1, enabled: true })).toBeNull();
+    expect(validateArgs(spec, { primary: null })).toBeNull();
+    expect(validateArgs(spec, { primary: "bad" })).not.toBeNull();
+    expect(validateArgs(spec, { primary: "okay", extra_one: "wrong" })).not.toBeNull();
+    expect(validateArgs(spec, { primary: "okay", enabled: 1 })).not.toBeNull();
+  });
+
+  it("enforces conditional, format and draft-07 schemas and fails closed for unsupported or remote schemas", () => {
+    const spec: ToolSpec = { name: "fx__conditional", description: "", inputSchema: {
+      $schema: "http://json-schema.org/draft-07/schema#", type: "object", additionalProperties: false,
+      properties: { mode: { enum: ["email", "none"] }, address: { type: "string", format: "email" } },
+      if: { properties: { mode: { const: "email" } }, required: ["mode"] }, then: { required: ["address"] },
+    } };
+    expect(validateArgs(spec, { mode: "none" })).toBeNull();
+    expect(validateArgs(spec, { mode: "email" })).not.toBeNull();
+    expect(validateArgs(spec, { mode: "email", address: "bad" })).not.toBeNull();
+    expect(validateArgs(spec, { mode: "email", address: "a@example.com" })).toBeNull();
+    for (const schema of [{ $ref: "https://example.com/schema" }, { type: "object", unknownValidationKeyword: true }, { type: "object", $async: true }]) {
+      expect(validateArgs({ ...spec, inputSchema: schema }, {})).toMatch(/cannot validate inputSchema/);
+    }
+  });
+
+  it("does not reuse a different tool's schema with the same $id", () => {
+    const a = { ...tool, inputSchema: { $id: "urn:probe:duplicate", type: "object", properties: { value: { const: 1 } }, required: ["value"] } };
+    const b = { ...tool, inputSchema: { $id: "urn:probe:duplicate", type: "object", properties: { value: { const: 2 } }, required: ["value"] } };
+    expect(validateArgs(a, { value: 1 })).toBeNull();
+    expect(validateArgs(b, { value: 1 })).not.toBeNull();
+    expect(validateArgs(b, { value: 2 })).toBeNull();
+  });
+
+  it("rejects a provider argument parse error even for an open-ended tool", async () => {
+    const model = scripted([[{ type: "tool_call", call: { id: "raw", name: tool.name, args: { _raw: "{bad" }, argumentError: "invalid JSON" } }, { type: "end" }], [{ type: "end" }]]);
+    let invoked = 0;
+    const frames = await runAgent({ model, tools: [{ ...tool, inputSchema: { type: "object", additionalProperties: true } }], messages: [{ role: "user", content: "x" }], emit() {}, callTool: async () => { invoked++; return { content: "wrong", isError: false }; } });
+    expect(invoked).toBe(0);
+    expect(frames.find((e) => e.type === "tool_result")).toMatchObject({ isError: true, content: "invalid JSON" });
+  });
+});
+
+describe("cooperative cancellation", () => {
+  it("does not start a model when already cancelled", async () => {
+    const controller = new AbortController(); controller.abort();
+    const model = scripted([[{ type: "token", text: "wrong" }, { type: "end" }]]);
+    const frames = await runAgent({ model, signal: controller.signal, tools: [], messages: [], emit() {}, callTool: async () => ({ content: "", isError: false }) });
+    expect(model.turnsTaken).toBe(0);
+    expect(frames.at(-1)).toMatchObject({ type: "done", stoppedBy: "error" });
+  });
+  it("passes the signal and stops before tools, later calls and the next model turn", async () => {
+    const controller = new AbortController(); let models = 0; let calls = 0;
+    const model: Model = { async *turn(_m, _t, signal) {
+      models++; expect(signal).toBe(controller.signal);
+      yield { type: "tool_call", call: { id: "1", name: LOOKUP.name, args: { house_number: "1", street: "X" } } };
+      yield { type: "tool_call", call: { id: "2", name: LOOKUP.name, args: { house_number: "2", street: "X" } } };
+      yield { type: "end" };
+    } };
+    const frames = await runAgent({ model, signal: controller.signal, tools: [LOOKUP], messages: [], emit() {}, callTool: async (_call, signal) => {
+      calls++; expect(signal).toBe(controller.signal); controller.abort(); return { content: "ran once", isError: false };
+    } });
+    expect(calls).toBe(1); expect(models).toBe(1);
+    expect(frames.at(-1)).toMatchObject({ type: "done", stoppedBy: "error" });
+    expect(frames.filter((e) => e.type === "done")).toHaveLength(1);
+  });
+  it("does not execute calls if cancellation happens as the model turn completes", async () => {
+    const controller = new AbortController(); let calls = 0;
+    const model: Model = { async *turn() {
+      yield { type: "tool_call", call: { id: "1", name: LOOKUP.name, args: { house_number: "1", street: "X" } } };
+      controller.abort();
+    } };
+    const frames = await runAgent({ model, signal: controller.signal, tools: [LOOKUP], messages: [], emit() {}, callTool: async () => { calls++; return { content: "wrong", isError: false }; } });
+    expect(calls).toBe(0); expect(frames.at(-1)).toMatchObject({ type: "done", stoppedBy: "error" });
+  });
+});
+
 describe("runAgent", () => {
   it("streams tokens, then done(answer), exactly one done, last", async () => {
     const model = scripted([[{ type: "token", text: "Hel" }, { type: "token", text: "lo" }, { type: "end" }]]);

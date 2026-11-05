@@ -51,7 +51,7 @@ A change is DONE when:
 | MCP manager (`server/mcp.ts`) | `npm test` (real stdio fixture) + `npm run smoke` (real runtime, every route, stopped by PID) |
 | provider wire changes | `npm test` (stubbed-fetch wire tests) + one live turn (`POST /api/chat`) against the real provider, frames read |
 | `/api/*` shape | `npm test` (`test/api.test.ts`) + `npm run smoke` |
-| any push | CI green on Node 20 and 22 (`.github/workflows/ci.yml`: typecheck · test · build · smoke) |
+| CI matrix | Node 22.12 and 24 (`.github/workflows/ci.yml`: typecheck · test · build · smoke) |
 | web | `npm test` (the web RED LEGs) + `node tools/screenshot.mjs` against the live runtime; open it and click one failed tool card; with debug on, open a thinking block and a turn strip |
 | debug surface | `npm test` (agent/providers/web debug tests) + `npm run smoke` (trace routes) + one live turn on a thinking model with `MCP_CHAT_THINK=1 MCP_CHAT_TRACE=1`, frames read: `thinking` present, `turn` per iteration, trace file on disk |
 | docs only | none |
@@ -91,6 +91,8 @@ Check: test/agent.test.ts "RED LEG: a tool that returns isError…", "…thrown 
 ```
 
 ## §6 Escape log
+
+- 2026-11-05 — A full review exercised a browser through the Vite proxy, HTTP runtime and a separate stdio MCP process. Local Llama 3.2 called `fixture__echo` with `orchid-72`, received the echoed value and finished on iteration two. A separate run returned a provider error, which reached the browser as an error. The socket smoke test checks refusal of a foreign origin, delivery of the configured Ollama system message and cancellation of a streaming model request when the client disconnects. Provider framing and declared tool schemas have independent negative cases in the offline suite. Hosted model accounts were outside this run.
 
 - 2026-09-15 — none yet in the artifact. Two instrument escapes during the build, both recorded above: the ANSI-blind mutation probe, and the orphan sweep that matched `tsx`.
 - 2026-09-20, later — **the testbed had no instruments** (operator: "as a testing bed its not that great — there's no log or ability to see the model thinking"). It could show a call and a result and nothing in between: no reasoning, no prompt, no cost, no record. Measured first: Ollama rejects `think:true` on `qwen3-coder` ("does not support thinking") and honours it on `qwen3.6`; its final frame carries token counts and durations; Anthropic streams `thinking_delta` under a budget and usage on `message_start`/`message_delta`. Built as three layers, red-first, 11 mutations red: `thinking` + `turn` frames in the loop (the turn carries a COPY of the messages sent — a probe confirmed the live array would have shown the post-append transcript), provider support with a one-shot think probe, a JSONL trace store with two read routes, and a debug toggle in the UI. Live on `qwen3.6:35b-a3b`: 231 thinking frames, two turn strips reading 8,070 then 9,880 prompt tokens. The first trace ever written caught a real failure before any of this was proven — `Ollama unreachable` — because the operator's Ollama updater had stopped the service mid-session.

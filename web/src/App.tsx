@@ -104,7 +104,7 @@ function Thinking({ text }: { text: string }) {
 
 const fmt = (n: number | undefined) => (n === undefined ? "?" : n.toLocaleString());
 
-/** One model iteration: what it cost and how it ended, expanding to the exact prompt. */
+/** One iteration's timing, finish state and conversation before provider formatting. */
 function TurnStrip({ info }: { info: TurnInfo }) {
   const u = info.usage;
   return (
@@ -118,7 +118,7 @@ function TurnStrip({ info }: { info: TurnInfo }) {
         <span className={`turnstrip__end turnstrip__end--${info.endedWith}`}>{info.endedWith}</span>
       </summary>
       <div className="turnstrip__body">
-        <div className="turnstrip__label">prompt the model was sent, oldest first</div>
+        <div className="turnstrip__label">Conversation messages, oldest first</div>
         {info.messages.map((m, i) => (
           <div key={i} className={`msg msg--${m.role}`}>
             <span className="msg__role">{m.role}{m.name ? ` › ${m.name}` : ""}{m.isError ? " (error)" : ""}</span>

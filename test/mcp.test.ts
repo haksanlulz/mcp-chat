@@ -33,6 +33,16 @@ describe("McpManager over stdio", () => {
   }, 60_000);
   afterAll(async () => { await mgr.stop(); });
 
+  it("rejects ambiguous routes before spawning and discovers tools on later pages", async () => {
+    const isolated = new McpManager();
+    try {
+      const statuses = await isolated.start([fixture("a__b"),fixture("trailing_"),fixture("repeat"), fixture("repeat"),
+        {...fixture("pages"),env:{MCP_FIXTURE_PAGES:"1"}}]);
+      expect(statuses.filter(s=>s.state==="failed").map(s=>s.name).sort()).toEqual(["a__b","repeat","trailing_"]);
+      expect(isolated.tools().map(t=>t.name).sort()).toEqual(["pages__echo","pages__fail"]);
+    } finally { await isolated.stop(); }
+  });
+
   it("RED LEG: one server that cannot start does not take the others down; it is reported failed with a reason", () => {
     expect(status.find((s) => s.name === "fx")).toEqual({ name: "fx", state: "up", tools: 2 });
     const bad = status.find((s) => s.name === "bad")!;
