@@ -43,6 +43,14 @@ describe("validateArgs runs before any call", () => {
   it("names a missing required argument", () => {
     expect(validateArgs(LOOKUP, { street: "Sedgwick Avenue" })).toMatch(/missing required argument "house_number"/);
   });
+  it("uses the declared key policy for pattern and constrained object schemas", () => {
+    const schema = { type: "object", patternProperties: { "^x_": { type: "integer" } } };
+    const tool = { name: "test", description: "", inputSchema: schema };
+    expect(validateArgs(tool, { x_number: 1, unmatched: true })).toBeNull();
+    expect(validateArgs(tool, { x_number: "bad" })).toMatch(/inputSchema/);
+    expect(validateArgs({ ...tool, inputSchema: { ...schema, additionalProperties: false } }, { other: 1 })).toMatch(/inputSchema/);
+    expect(validateArgs({ ...tool, inputSchema: { type: "object", propertyNames: { pattern: "^x_" } } }, { x_one: true })).toBeNull();
+  });
   it("rejects an unknown key with a near-miss", () => {
     expect(validateArgs(LOOKUP, { house_number: "1", street: "X", limt: 5 })).toMatch(/"limt" \(did you mean "limit"\?\)/);
   });

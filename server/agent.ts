@@ -114,9 +114,11 @@ export function validateArgs(tool: ToolSpec, args: unknown): string | null {
 
     // Keep the original typo guard for simple schemas. Composed/ref schemas
     // determine their accepted keys through JSON Schema rather than a flat list.
-    const simple = !["$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "if"].some((k) => k in tool.inputSchema);
+    const keyRules = ["$ref", "$dynamicRef", "$recursiveRef", "allOf", "anyOf", "oneOf", "not", "if",
+      "patternProperties", "propertyNames", "unevaluatedProperties", "dependencies", "dependentRequired", "dependentSchemas"];
+    const simple = !keyRules.some((key) => key in tool.inputSchema);
     const strictKeys = simple && tool.inputSchema.additionalProperties === undefined;
-    if ((strictKeys || tool.inputSchema.additionalProperties === false) && !tool.inputSchema.patternProperties && simple) {
+    if (simple && (strictKeys || tool.inputSchema.additionalProperties === false)) {
       const unknown = Object.keys(args).filter((k) => !accepted.includes(k));
       if (unknown.length) {
         const described = unknown.map((k) => {
