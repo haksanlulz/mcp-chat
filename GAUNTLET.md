@@ -24,7 +24,7 @@ A change is DONE when:
 
 ## §3 Invariants
 
-Anthropic extended-thinking tool continuations must replay signed and redacted blocks in order without emitting opaque payloads in frames or sharing them across concurrent requests or other providers. `test/providers.test.ts` exercises two concurrent two-turn conversations and an adapter switch with stubbed provider responses; it does not substitute for a live Anthropic call. Schema checks support draft-07, 2019-09 and 2020-12; the deliberate simple-schema typo guard and unsupported-dialect failure are covered in `test/agent.test.ts`.
+Anthropic extended-thinking tool continuations must replay signed and redacted blocks in order without emitting opaque payloads in frames or sharing them across concurrent requests or other providers. `test/providers.test.ts` exercises two concurrent two-turn conversations and an adapter switch with stubbed provider responses; it does not substitute for a live Anthropic call. Schema checks support draft-04, draft-07, 2019-09 and 2020-12 and ignore undefined keywords; the deliberate simple-schema typo guard, the vendor-keyword and draft-04 cases, and the unsupported-dialect failure are covered in `test/agent.test.ts`.
 
 | # | Invariant | Scan |
 |---|---|---|

@@ -2,6 +2,12 @@
 
 ## Last Updated
 
+### 2026-11-06 — Vendor keywords and draft-04 no longer fail every call (Fable 5.1)
+
+Audit finding MC-1 (`F:/claude/.coord/reviews/fable-audit-codex-2026-11-06.md`): `validateArgs` compiled every `inputSchema` with Ajv `strict: true`, so one `x-` vendor keyword or OpenAPI `nullable` made every call to that tool fail with "strict mode: unknown keyword" before the server was reached, and a draft-04 `$schema` failed with "no schema with key or ref". Now `strictSchema: false` (undefined keywords ignored as JSON Schema specifies; `strictNumbers` kept; the meta-schema still rejects a malformed keyword the dialect does define) and `ajv-draft-04` serves draft-04 (boolean `exclusiveMaximum` enforced). External `$ref`, `$async` and undeclared dialects (draft-06 in the test) still fail closed. The `unknownValidationKeyword` pin in `test/agent.test.ts` flipped from reject to accept; README rule 1 and GAUNTLET updated. An unknown `format` is ignored with Ajv's console warning at compile time. Four commits ahead of origin now, nothing pushed; `studio-site/public/mcp-chat.html` and the evidence ledger pin dbc1083 and go stale on push (audit S-6).
+
+verify: `npx vitest run && npm run typecheck` — 118 tests. With `strict: true` restored the new case fails on exactly the old error.
+
 ### 2026-11-05 — Anthropic continuation and schema dialect (gpt-6.1-terra)
 
 Goal was to preserve signed Anthropic thinking blocks through tool continuations and support draft 2019-09. The agent retains provider-only state per assistant message, replays ordered thinking, redacted, text and tool blocks only to Anthropic, and keeps opaque values out of frames. Concurrent conversations and adapter switching are covered by offline tests. The deliberate simple-schema typo guard and supported dialects are documented. Remaining: live Anthropic confirmation; no paid call was authorized.

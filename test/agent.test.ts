@@ -110,9 +110,24 @@ describe("JSON Schema argument boundary", () => {
     expect(validateArgs(spec, { mode: "email" })).not.toBeNull();
     expect(validateArgs(spec, { mode: "email", address: "bad" })).not.toBeNull();
     expect(validateArgs(spec, { mode: "email", address: "a@example.com" })).toBeNull();
-    for (const schema of [{ $ref: "https://example.com/schema" }, { type: "object", unknownValidationKeyword: true }, { type: "object", $async: true }]) {
+    for (const schema of [{ $ref: "https://example.com/schema" }, { $schema: "http://json-schema.org/draft-06/schema#", type: "object" }, { type: "object", $async: true }]) {
       expect(validateArgs({ ...spec, inputSchema: schema }, {})).toMatch(/cannot validate inputSchema/);
     }
+  });
+
+  it("ignores vendor keywords and validates draft-04 schemas instead of failing closed", () => {
+    // Before 2026-11-06 any unknown keyword made every call to the tool fail
+    // with "strict mode: unknown keyword" before the server was reached.
+    const vendor: ToolSpec = { ...tool, inputSchema: { type: "object", properties: { q: { type: "string", "x-hint": "search text", nullable: false } }, required: ["q"], unknownValidationKeyword: true } };
+    expect(validateArgs(vendor, { q: "ok" })).toBeNull();
+    expect(validateArgs(vendor, { q: 1 })).not.toBeNull();
+    expect(validateArgs(vendor, {})).not.toBeNull();
+    // draft-04 spells exclusiveMaximum as a boolean; later dialects reject that shape outright.
+    const draft4: ToolSpec = { ...tool, inputSchema: { $schema: "http://json-schema.org/draft-04/schema#", type: "object", properties: { limit: { type: "integer", maximum: 10, exclusiveMaximum: true } }, required: ["limit"] } };
+    expect(validateArgs(draft4, { limit: 5 })).toBeNull();
+    expect(validateArgs(draft4, { limit: 10 })).not.toBeNull();
+    expect(validateArgs(draft4, {})).not.toBeNull();
+    expect(validateArgs({ ...draft4, inputSchema: { ...draft4.inputSchema, $schema: undefined } }, { limit: 5 })).toMatch(/cannot validate inputSchema/);
   });
 
   it("does not reuse a different tool's schema with the same $id", () => {

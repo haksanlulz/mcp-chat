@@ -18,6 +18,7 @@
 
 import Ajv from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
+import AjvDraft04 from "ajv-draft-04";
 import Ajv2019 from "ajv/dist/2019.js";
 import addFormats from "ajv-formats";
 
@@ -143,10 +144,15 @@ export function validateArgs(tool: ToolSpec, args: unknown): string | null {
       rejectExternalRefs(schema);
       if (strictKeys) schema.additionalProperties = false;
       const dialect = schema.$schema;
-      const options = { strict: true, strictTypes: false, strictTuples: false, strictRequired: false, allowUnionTypes: true, allErrors: true };
+      // Unknown keywords (vendor "x-" hints, OpenAPI "nullable") are ignored, as
+      // JSON Schema specifies. Under strict mode any one of them rejected every
+      // call to that tool before the server was reached. A keyword the declared
+      // dialect does define is still checked against its meta-schema.
+      const options = { strictSchema: false, strictNumbers: true, strictTypes: false, strictTuples: false, strictRequired: false, allowUnionTypes: true, allErrors: true };
       const ajv = dialect === "http://json-schema.org/draft-07/schema#" || dialect === "http://json-schema.org/draft-07/schema"
         ? new Ajv(options) : dialect === "https://json-schema.org/draft/2019-09/schema" || dialect === "https://json-schema.org/draft/2019-09/schema#"
-        ? new Ajv2019(options) : new Ajv2020(options);
+        ? new Ajv2019(options) : dialect === "http://json-schema.org/draft-04/schema#" || dialect === "http://json-schema.org/draft-04/schema"
+        ? new AjvDraft04(options) : new Ajv2020(options);
       addFormats(ajv);
       check = ajv.compile(schema);
       if ("$async" in check && check.$async) throw new Error("async schemas are not supported");
