@@ -56,11 +56,13 @@ So any model, as long as it sits behind one of those three wires and can call to
   "system": "optional system prompt",
   "maxIterations": 8,
   "servers": [
-    { "name": "housing", "command": "npx", "args": ["-y", "@haksanlulz/mcp-nychousing"] },
+    { "name": "housing", "command": "npx", "args": ["-y", "@haksanlulz/mcp-nychousing"], "readOnly": true },
     { "name": "cards",   "command": "npx", "args": ["tsx", "/path/to/mcp-scryfall/index.ts"], "cwd": "/path/to/mcp-scryfall" }
   ]
 }
 ```
+
+**Only read-only tools run.** Nothing here asks you before a tool call, so a call runs only when the tool declares `annotations.readOnlyHint: true`, or its server has `"readOnly": true` in this file (you vouch that every tool on it only reads). Any other call is refused before the server sees it, and the model is told why.
 
 Each server's tools are exposed to the model as `<name>__<tool>`, so two servers can both have a `search`. A server that fails to start is reported on `/api/health` and in the UI's header; the assistant runs with whatever came up. The child process gets `PATH` and the platform basics plus the `env` you give it, and nothing else from the shell.
 

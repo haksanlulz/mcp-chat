@@ -20,6 +20,9 @@ export type ServerConfig = {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  /** The config's author vouches that every tool on this server only reads. Without it, only tools that declare
+   *  `annotations.readOnlyHint: true` are run (MCP security audit 2026-11-25). */
+  readOnly?: boolean;
 };
 
 export type ServerStatus = {
@@ -41,7 +44,7 @@ export function split(qualified: string): { server: string; tool: string } | nul
   return { server: qualified.slice(0, i), tool: qualified.slice(i + SEP.length) };
 }
 
-type Live = { config: ServerConfig; client: Client; tools: ToolSpec[] };
+type Live = { config: ServerConfig; client: Client; tools: ToolSpec[]; readOnlyTools: Set<string> };
 
 export class McpManager {
   private live = new Map<string, Live>();
@@ -72,6 +75,7 @@ export class McpManager {
         transport.stderr?.on('data', () => {});
         await withTimeout(client.connect(transport), timeoutMs, `connect to "${config.name}"`);
         const tools: ToolSpec[] = [];
+        const readOnlyTools = new Set<string>();
         const names = new Set<string>();
         const cursors = new Set<string>();
         let cursor: string | undefined;
@@ -80,13 +84,14 @@ export class McpManager {
           for (const tool of listed.tools) {
             if (names.has(tool.name)) throw new Error(`Duplicate tool name: ${tool.name}`);
             names.add(tool.name);
+            if ((tool.annotations as { readOnlyHint?: unknown } | undefined)?.readOnlyHint === true) readOnlyTools.add(tool.name);
             tools.push({ name: qualify(config.name, tool.name), description: tool.description ?? "", inputSchema: tool.inputSchema as ToolSpec["inputSchema"] });
           }
           cursor = listed.nextCursor;
           if (cursor && (cursors.has(cursor) || cursors.size >= 100)) throw new Error("Invalid or excessive tools/list pagination");
           if (cursor) cursors.add(cursor);
         } while (cursor);
-        this.live.set(config.name, { config, client, tools });
+        this.live.set(config.name, { config, client, tools, readOnlyTools });
       } catch (err) {
         await client.close().catch(() => undefined);
         this.failed.set(config.name, err instanceof Error ? err.message : String(err));
@@ -111,6 +116,15 @@ export class McpManager {
     const parts = split(call.name);
     const l = parts ? this.live.get(parts.server) : undefined;
     if (!parts || !l) return { content: `no running server for tool "${call.name}"`, isError: true };
+    // Nothing here asks the person first, so only reading is allowed: a tool that declares itself read-only, or a
+    // server the config vouches for. Anything else is refused before the server sees it.
+    if (l.config.readOnly !== true && !l.readOnlyTools.has(parts.tool)) {
+      return {
+        content: `${call.name} was not run: this app runs only read-only tools, and this tool does not declare itself read-only. ` +
+          `If every tool on "${parts.server}" only reads, the person who runs this app can set "readOnly": true on that server in the config.`,
+        isError: true,
+      };
+    }
     const res = await l.client.callTool({ name: parts.tool, arguments: call.args }, undefined, signal ? { signal } : undefined);
     const content = (res.content as Array<{ type: string; text?: string }> | undefined ?? [])
       .map((c) => (c.type === "text" && typeof c.text === "string" ? c.text : `[${c.type}]`))

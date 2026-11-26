@@ -14,7 +14,7 @@ const server = new Server({ name: "echo-fixture", version: "0.0.0" }, { capabili
 server.setRequestHandler(ListToolsRequestSchema, async req => {
   if (process.env.MCP_FIXTURE_PAGES && !req.params?.cursor) return {tools:[],nextCursor:"second"};
   return { tools: [
-    { name: "echo", description: "returns text back", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false } },
+    { name: "echo", description: "returns text back", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false } },
     { name: "fail", description: "always returns isError", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   ] };
 });

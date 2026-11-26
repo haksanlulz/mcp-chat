@@ -26,7 +26,7 @@ describe("McpManager over stdio", () => {
 
   beforeAll(async () => {
     status = await mgr.start([
-      fixture("fx"),
+      { ...fixture("fx"), readOnly: true },
       { name: "bad", command: "definitely-not-a-command-on-this-machine" },
       { name: "bad name!", command: process.execPath },
     ], { timeoutMs: 30_000 });
@@ -71,5 +71,35 @@ describe("McpManager over stdio", () => {
   it("a call to a server that is not up is an isError result, not a throw", async () => {
     await expect(mgr.call({ id: "3", name: "bad__anything", args: {} })).resolves.toMatchObject({ isError: true, content: expect.stringContaining("no running server") });
     await expect(mgr.call({ id: "4", name: "unqualified", args: {} })).resolves.toMatchObject({ isError: true });
+  });
+});
+
+// MCP security audit 2026-11-25: every tool the model asked for was run, with nothing between a talked-round
+// model and a tool that changes things. A call now runs only when the tool says it is read-only, or the
+// person who wrote the config vouched for the whole server with "readOnly": true. Anything else is refused.
+describe("only read-only tools run", () => {
+  const unvouched = new McpManager(), vouched = new McpManager();
+  beforeAll(async () => {
+    await Promise.all([unvouched.start([fixture("rw")], { timeoutMs: 30_000 }), vouched.start([{ ...fixture("ok"), readOnly: true }], { timeoutMs: 30_000 })]);
+  }, 60_000);
+  afterAll(async () => { await Promise.all([unvouched.stop(), vouched.stop()]); });
+
+  it("runs a tool that declares itself read-only, with no config flag", async () => {
+    const r = await unvouched.call({ id: "r1", name: "rw__echo", args: { text: "hi" } });
+    expect(r.isError).toBe(false);
+    expect(JSON.parse(r.content).echoed).toBe("hi");
+  });
+
+  it("refuses a tool that does not, and never reaches the server", async () => {
+    const r = await unvouched.call({ id: "r2", name: "rw__fail", args: {} });
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/not run/);
+    expect(r.content).toMatch(/readOnly/);
+    expect(r.content).not.toContain("fixture upstream 503");
+  });
+
+  it("runs it when the config vouches for the server", async () => {
+    const r = await vouched.call({ id: "r3", name: "ok__fail", args: {} });
+    expect(r.content).toBe("fixture upstream 503");
   });
 });

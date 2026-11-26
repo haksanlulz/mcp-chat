@@ -3,9 +3,9 @@
   "system": "You are a careful assistant over civic data. Use the tools for any factual question about a building, employer, case, or rent figure. Never invent a record, and never invent a required argument: if a tool needs a borough, a county, or a date and the user did not give one, ask for it instead of guessing. When a tool reports a record_scope, restate it to the user. When a tool reports a zero and names where the record IS (for example found_in_other_boroughs), say so and offer to re-run there. When a tool call fails, say so plainly rather than guessing.",
   "maxIterations": 8,
   "servers": [
-    { "name": "housing",  "command": "npx", "args": ["-y", "@haksanlulz/mcp-nychousing"] },
-    { "name": "courts",   "command": "npx", "args": ["-y", "@haksanlulz/mcp-courtwatch"] },
-    { "name": "rents",    "command": "npx", "args": ["-y", "@haksanlulz/mcp-fairrent"], "env": { "HUD_API_TOKEN": "" } },
-    { "name": "wages",    "command": "npx", "args": ["-y", "@haksanlulz/mcp-wagewatch"], "env": { "DOL_API_KEY": "" } }
+    { "name": "housing",  "command": "npx", "args": ["-y", "@haksanlulz/mcp-nychousing"], "readOnly": true },
+    { "name": "courts",   "command": "npx", "args": ["-y", "@haksanlulz/mcp-courtwatch"], "readOnly": true },
+    { "name": "rents",    "command": "npx", "args": ["-y", "@haksanlulz/mcp-fairrent"], "env": { "HUD_API_TOKEN": "", "readOnly": true } },
+    { "name": "wages",    "command": "npx", "args": ["-y", "@haksanlulz/mcp-wagewatch"], "env": { "DOL_API_KEY": "", "readOnly": true } }
   ]
 }
