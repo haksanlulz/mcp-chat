@@ -56,7 +56,7 @@ So any model, as long as it sits behind one of those three wires and can call to
   "system": "optional system prompt",
   "maxIterations": 8,
   "servers": [
-    { "name": "housing", "command": "npx", "args": ["-y", "@haksanlulz/mcp-nychousing"], "readOnly": true },
+    { "name": "housing", "command": "npx", "args": ["-y", "@haksanlulz/mcp-nychousing@1.1.1"], "readOnly": true },
     { "name": "cards",   "command": "npx", "args": ["tsx", "/path/to/mcp-scryfall/index.ts"], "cwd": "/path/to/mcp-scryfall" }
   ]
 }
