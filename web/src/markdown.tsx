@@ -106,6 +106,22 @@ function indentOf(line: string): number {
 const INLINE = /(`[^`]+`)|(\*\*(.+?)\*\*(?!\*))|(\[([^\]]+)\]\(([^)\s]+)\))|(https?:\/\/[^\s<]+)|(?<![\w*])\*(?!\s)((?:[^*]|\*\*)+?)(?<!\s)\*(?![\w*])|(?<![\w_])_(?!\s)([^_]+?)(?<!\s)_(?![\w_])/g;
 const TRAILING = /[.,;:!?)\]]+$/;
 
+// A link's text can name one site while it points at another; an injected instruction uses that to send
+// data out in a query string (MCP security audit 2026-11-25). The real host is shown beside any link whose
+// text does not already show it, as a whole name (so "mybank.example" does not pass for "bank.example").
+function hostOf(href: string): string | undefined {
+  try { return new URL(href).host.toLowerCase() || undefined; } catch { return undefined; }
+}
+function showsHost(text: string, host: string): boolean {
+  const t = text.toLowerCase();
+  for (const h of new Set([host, host.replace(/^www\./, "")])) {
+    for (let i = t.indexOf(h); i !== -1; i = t.indexOf(h, i + 1)) {
+      if (!/[a-z0-9.-]/.test(t[i - 1] ?? "") && !/[a-z0-9-]/.test(t[i + h.length] ?? "")) return true;
+    }
+  }
+  return false;
+}
+
 /** Inline markdown -> nodes. Bold, italic, code, links; everything else is text. */
 export function inline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -125,7 +141,11 @@ export function inline(text: string): ReactNode[] {
     else if (bold) out.push(<b key={k++}>{inline(boldInner ?? "")}</b>);
     else if (starInner !== undefined || underInner !== undefined) out.push(<i key={k++}>{inline(starInner ?? underInner ?? "")}</i>);
     else if (linkText !== undefined && href !== undefined) {
-      if (/^https?:\/\//i.test(href)) out.push(<a key={k++} href={href} target="_blank" rel="noopener noreferrer">{linkText}</a>);
+      if (/^https?:\/\//i.test(href)) {
+        out.push(<a key={k++} href={href} target="_blank" rel="noopener noreferrer">{linkText}</a>);
+        const host = hostOf(href);
+        if (host && !showsHost(linkText, host)) out.push(<span key={k++} className="link__host">({host})</span>);
+      }
       // models write [tool_name](link) for a tool they mean, not a URL: show the name as code
       else if (/^[a-z0-9_]+$/i.test(linkText)) out.push(<code key={k++}>{linkText}</code>);
       else out.push(linkText);

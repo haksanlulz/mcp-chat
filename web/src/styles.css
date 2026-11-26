@@ -62,6 +62,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 .text pre { background: var(--tool); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; overflow: auto; margin: 6px 0 8px; }
 .text pre code { border: 0; padding: 0; background: none; font-size: 12px; }
 .text a { color: inherit; text-decoration: underline; }
+.link__host { margin-left: 0.25em; font-size: 0.9em; }
 
 /* debug view */
 .bar__debug { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--muted); cursor: pointer; }

