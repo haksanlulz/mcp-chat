@@ -13,7 +13,11 @@ const server = new Server({ name: "echo-fixture", version: "0.0.0" }, { capabili
 
 server.setRequestHandler(ListToolsRequestSchema, async req => {
   if (process.env.MCP_FIXTURE_PAGES && !req.params?.cursor) return {tools:[],nextCursor:"second"};
-  return { tools: [
+  // MCP_FIXTURE_ENV_TOOL adds `env_names`: the NAMES (never values) of the variables this process was given.
+  const envTool = process.env.MCP_FIXTURE_ENV_TOOL
+    ? [{ name: "env_names", description: "names of this process's environment variables", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: {}, additionalProperties: false } }]
+    : [];
+  return { tools: [...envTool,
     { name: "echo", description: "returns text back", annotations: { readOnlyHint: true }, inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false } },
     { name: "fail", description: "always returns isError", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   ] };
@@ -23,6 +27,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (req.params.name === "echo") {
     const text = String((req.params.arguments as { text?: unknown } | undefined)?.text ?? "");
     return { content: [{ type: "text", text: JSON.stringify({ echoed: text, record_scope: "a fixture, not data" }) }] };
+  }
+  if (req.params.name === "env_names") {
+    return { content: [{ type: "text", text: JSON.stringify(Object.keys(process.env).sort()) }] };
   }
   if (req.params.name === "fail") {
     return { content: [{ type: "text", text: "fixture upstream 503" }], isError: true };

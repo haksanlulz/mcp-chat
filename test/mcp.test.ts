@@ -103,3 +103,25 @@ describe("only read-only tools run", () => {
     expect(r.content).toBe("fixture upstream 503");
   });
 });
+
+// Secrets migration (workspace tools/secrets/PLAN.md): mcp-chat may be started with a model key in its own
+// environment (secret.py run). That is safe only because a server it starts never inherits that environment:
+// a server gets the platform basics plus the env its config entry gives it, nothing else.
+describe("a server never inherits mcp-chat's secrets", () => {
+  const mgr = new McpManager();
+  const planted = "MCP_CHAT_PLANTED_API_KEY";
+  beforeAll(async () => {
+    process.env[planted] = "must-not-reach-the-server";
+    await mgr.start([{ ...fixture("envcheck"), env: { MCP_FIXTURE_ENV_TOOL: "1", OWN_TOKEN: "this-servers-own" } }], { timeoutMs: 30_000 });
+  }, 60_000);
+  afterAll(async () => { delete process.env[planted]; await mgr.stop(); });
+
+  it("passes the config's own env and none of the parent's secrets", async () => {
+    const r = await mgr.call({ id: "e1", name: "envcheck__env_names", args: {} });
+    expect(r.isError).toBe(false);
+    const names: string[] = JSON.parse(r.content);
+    expect(names).toContain("OWN_TOKEN");
+    expect(names).not.toContain(planted);
+    expect(names.filter((n) => /ANTHROPIC|OPENAI|_API_KEY$/.test(n) && n !== "OWN_TOKEN")).toEqual([]);
+  });
+});
