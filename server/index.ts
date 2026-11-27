@@ -91,6 +91,15 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   catch { throw new BadRequest(400, "Send valid UTF-8 JSON."); }
 }
 
+const SECURITY_HEADERS: Record<string, string> = {
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+  "referrer-policy": "no-referrer",
+  "cross-origin-opener-policy": "same-origin",
+  vary: "Sec-Fetch-Site, Origin",
+};
+
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
@@ -108,13 +117,19 @@ async function main(): Promise<void> {
 
   const port = Number(process.env.MCP_CHAT_PORT ?? 8731);
   const server = createServer(async (req, res) => {
+    // App standard WEB-2/WEB-3 (test/http-guard.test.ts): every response, refusals and the event stream
+    // included. The runtime serves only the API, so its CSP allows nothing to load at all.
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
     try {
       const host = req.headers.host ?? "";
       if (!/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i.test(host)) {
         return json(res, 403, { error: "Local host required." });
       }
       const origin = req.headers.origin;
-      if ((origin !== undefined && origin !== `http://${host}`) || req.headers["sec-fetch-site"] === "cross-site") {
+      // same-site is a page on another localhost port: refused like cross-site (the Vite dev page reaches
+      // the API through its own proxy, so the browser sends same-origin)
+      const site = req.headers["sec-fetch-site"];
+      if ((origin !== undefined && origin !== `http://${host}`) || site === "cross-site" || site === "same-site") {
         return json(res, 403, { error: "Same-origin access required." });
       }
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
