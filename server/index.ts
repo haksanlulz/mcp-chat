@@ -12,6 +12,9 @@
  *   otherwise              -> Ollama at OLLAMA_BASE_URL (default 127.0.0.1:11434) with OLLAMA_MODEL
  * MCP_CHAT_PORT overrides 8731. Binds 127.0.0.1 only; this is a local tool.
  *
+ * GET / serves the built page (npm run build:web; MCP_CHAT_WEB_DIR overrides dist/web) with a nonce CSP
+ * and Trusted Types (server/web.ts). npm run dev:web is the development page, through Vite.
+ *
  * Debug surface (this is a testbed):
  *   MCP_CHAT_THINK=1              ask Ollama for the model's reasoning (probed; models without it fall back)
  *   ANTHROPIC_THINKING_BUDGET=N   enable extended thinking on the Anthropic provider with an N-token budget
@@ -21,11 +24,13 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runAgent, type AgentEvent, type Model } from "./agent.js";
 import { parseChatBody } from "./api.js";
 import { McpManager, type ServerConfig } from "./mcp.js";
 import { TraceStore } from "./trace.js";
+import { serveWeb } from "./web.js";
 import { OllamaModel } from "./providers/ollama.js";
 import { AnthropicModel } from "./providers/anthropic.js";
 import { OpenAIModel } from "./providers/openai.js";
@@ -116,9 +121,10 @@ async function main(): Promise<void> {
   console.error(`[mcp-chat] traces: ${traces.dir ?? "off (MCP_CHAT_TRACE=1 to enable)"}`);
 
   const port = Number(process.env.MCP_CHAT_PORT ?? 8731);
+  const webDir = resolve(process.env.MCP_CHAT_WEB_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "web"));
   const server = createServer(async (req, res) => {
     // App standard WEB-2/WEB-3 (test/http-guard.test.ts): every response, refusals and the event stream
-    // included. The runtime serves only the API, so its CSP allows nothing to load at all.
+    // included. Everything but the page gets a CSP that allows nothing to load; the page replaces it.
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
     try {
       const host = req.headers.host ?? "";
@@ -172,6 +178,7 @@ async function main(): Promise<void> {
         });
         return res.end();
       }
+      if (serveWeb(webDir, req.method, url.pathname, res)) return;
       json(res, 404, { error: `no route ${req.method} ${url.pathname}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : `non-Error value (${typeof err})`;

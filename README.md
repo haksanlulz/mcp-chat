@@ -37,6 +37,8 @@ npm run dev:server        # runtime on http://127.0.0.1:8731
 npm run dev:web           # UI on http://127.0.0.1:5173, proxies /api to the runtime
 ```
 
+Or build the UI once and let the runtime serve it: `npm run build:web`, then the runtime's own `http://127.0.0.1:8731/`. That page gets a fresh CSP nonce per load with `strict-dynamic`, and Trusted Types with no policy allowed, so no HTML string can reach a DOM sink. The Vite dev page does not get either, because its hot reload needs inline script. `MCP_CHAT_WEB_DIR` overrides `dist/web`.
+
 Model selection, by environment, first match wins:
 
 | env | provider |
@@ -75,6 +77,7 @@ Each server's tools are exposed to the model as `<name>__<tool>`, so two servers
 | `POST /api/chat` | `{ messages: [{ role, content }] }` → `text/event-stream` of frames below; `x-mcp-chat-trace` header when tracing is on |
 | `GET /api/traces` | recent traces (id, model, question) |
 | `GET /api/trace/:id` | one trace's frames |
+| `GET /`, `GET /assets/*` | the built UI (`dist/web`) with a nonce CSP and Trusted Types; 404 until `npm run build:web` |
 
 Frames, in order per iteration: `thinking` · `token` · `tool_call` · `turn` (iteration, the messages and tools sent, usage, how it ended) · `tool_result` (with `isError`) · `error` · `done` (`stoppedBy: answer | cap | error`). `done` is emitted exactly once, last.
 
