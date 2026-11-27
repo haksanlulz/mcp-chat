@@ -2,6 +2,10 @@
 
 ## Last Updated
 
+### 2026-11-25 to 26 — MCP security audit: read-only calls only, pinned example config, link hosts shown (Opus 5.5, root cwd)
+
+`44a0193` a tool call runs only when the tool declares `readOnlyHint: true` or its server has `"readOnly": true` in the config; write tools do not run. `ec22488` the example config pins each `npx -y` package to its published version, and fixes `"readOnly"` sitting inside `env`. `b66c613` a `[text](https://...)` link whose text does not name its real host shows the host beside it. `f51dbf7` a started MCP server never inherits the runtime's secrets (test). All pushed. By design, not changed: the OpenAI key follows `OPENAI_BASE_URL` (both are the operator's environment); traces are off unless `MCP_CHAT_TRACE` is set and never deleted (the operator's call). Audit record: the operator's local MCP security audit report, rows 10, 12, 25.
+
 ### 2026-11-06 — Vendor keywords and draft-04 no longer fail every call (Fable 5.1)
 
 Audit finding MC-1 (`F:/claude/.coord/reviews/fable-audit-codex-2026-11-06.md`): `validateArgs` compiled every `inputSchema` with Ajv `strict: true`, so one `x-` vendor keyword or OpenAPI `nullable` made every call to that tool fail with "strict mode: unknown keyword" before the server was reached, and a draft-04 `$schema` failed with "no schema with key or ref". Now `strictSchema: false` (undefined keywords ignored as JSON Schema specifies; `strictNumbers` kept; the meta-schema still rejects a malformed keyword the dialect does define) and `ajv-draft-04` serves draft-04 (boolean `exclusiveMaximum` enforced). External `$ref`, `$async` and undeclared dialects (draft-06 in the test) still fail closed. The `unknownValidationKeyword` pin in `test/agent.test.ts` flipped from reject to accept; README rule 1 and GAUNTLET updated. An unknown `format` is ignored with Ajv's console warning at compile time. Four commits ahead of origin now, nothing pushed; `studio-site/public/mcp-chat.html` and the evidence ledger pin dbc1083 and go stale on push (audit S-6).
