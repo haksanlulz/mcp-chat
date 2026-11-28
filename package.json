@@ -12,6 +12,7 @@
     "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
   "scripts": {
+    "start": "node --import tsx server/launch.ts",
     "dev:server": "tsx watch server/index.ts",
     "dev:web": "vite",
     "build:web": "vite build",

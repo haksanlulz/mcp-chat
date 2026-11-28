@@ -30,6 +30,7 @@ import { runAgent, type AgentEvent, type Model } from "./agent.js";
 import { parseChatBody } from "./api.js";
 import { McpManager, type ServerConfig } from "./mcp.js";
 import { TraceStore } from "./trace.js";
+import { logSecurity, oneLine, statusLine, type SecurityEvent } from "./log.js";
 import { serveWeb } from "./web.js";
 import { OllamaModel } from "./providers/ollama.js";
 import { AnthropicModel } from "./providers/anthropic.js";
@@ -103,7 +104,27 @@ const SECURITY_HEADERS: Record<string, string> = {
   "referrer-policy": "no-referrer",
   "cross-origin-opener-policy": "same-origin",
   vary: "Sec-Fetch-Site, Origin",
+  // ASVS V14.3.2: nothing the API returns is cached (traces hold conversation text). The page sets no-store
+  // too; built assets override this with no-cache.
+  "cache-control": "no-store",
 };
+
+// ASVS V3.5.4: the runtime's own hostname. Browsers resolve every *.localhost name to loopback, and each name
+// is a site of its own, unlike 127.0.0.1, which every local tool shares whatever its port. 127.0.0.1 and
+// localhost keep working for clients and older bookmarks.
+const OWN_HOST = "mcp-chat.localhost";
+const LOCAL_HOST = /^(?:localhost|mcp-chat\.localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i;
+
+/** The request path without its query, for log lines. */
+function pathOf(req: IncomingMessage): string {
+  try { return new URL(req.url ?? "/", "http://127.0.0.1").pathname; } catch { return "(unparsable)"; }
+}
+
+/** A security event about this request: method, path and the browser's Origin and Sec-Fetch-Site. */
+function requestEvent(req: IncomingMessage, e: Pick<SecurityEvent, "event" | "status" | "reason">): SecurityEvent {
+  const origin = req.headers.origin, site = req.headers["sec-fetch-site"];
+  return { ...e, method: req.method ?? "", path: pathOf(req), ...(origin ? { origin } : {}), ...(typeof site === "string" ? { site } : {}) };
+}
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
@@ -114,9 +135,12 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const mcp = new McpManager();
   const status = await mcp.start(cfg.servers);
-  for (const s of status) console.error(`[mcp-chat] ${s.name}: ${s.state}${s.state === "up" ? ` (${s.tools} tools)` : ` — ${s.error}`}`);
+  for (const s of status) console.error(statusLine(s));
   const { model, label } = pickModel(cfg);
   console.error(`[mcp-chat] model: ${label}`);
+  if ((process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) && process.env.MCP_CHAT_KEY_SOURCE !== "store") {
+    console.error("[mcp-chat] the model key came from this shell's environment; npm start reads it from a secret store (README § Keys)");
+  }
   const traces = new TraceStore(process.env.MCP_CHAT_TRACE);
   console.error(`[mcp-chat] traces: ${traces.dir ?? "off (MCP_CHAT_TRACE=1 to enable)"}`);
 
@@ -128,7 +152,8 @@ async function main(): Promise<void> {
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
     try {
       const host = req.headers.host ?? "";
-      if (!/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i.test(host)) {
+      if (!LOCAL_HOST.test(host)) {
+        logSecurity(requestEvent(req, { event: "refused", status: 403, reason: "Local host required." }));
         return json(res, 403, { error: "Local host required." });
       }
       const origin = req.headers.origin;
@@ -136,6 +161,7 @@ async function main(): Promise<void> {
       // the API through its own proxy, so the browser sends same-origin)
       const site = req.headers["sec-fetch-site"];
       if ((origin !== undefined && origin !== `http://${host}`) || site === "cross-site" || site === "same-site") {
+        logSecurity(requestEvent(req, { event: "refused", status: 403, reason: "Same-origin access required." }));
         return json(res, 403, { error: "Same-origin access required." });
       }
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -154,14 +180,17 @@ async function main(): Promise<void> {
       }
       if (req.method === "POST" && url.pathname === "/api/chat") {
         const parsed = parseChatBody(await readJson(req));
-        if (!parsed.ok) return json(res, 400, { error: parsed.error });
+        if (!parsed.ok) {
+          logSecurity(requestEvent(req, { event: "rejected", status: 400, reason: parsed.error }));
+          return json(res, 400, { error: parsed.error });
+        }
         const last = parsed.messages[parsed.messages.length - 1]!;
         const trace = traces.begin({ model: label, messages: parsed.messages.length, question: last.content.slice(0, 200) });
         const controller = new AbortController();
         res.once("close", () => { if (!res.writableEnded) controller.abort(); });
         res.writeHead(200, {
           "content-type": "text/event-stream",
-          "cache-control": "no-cache",
+          "cache-control": "no-store",
           connection: "keep-alive",
           ...(trace ? { "x-mcp-chat-trace": trace.id } : {}),
         });
@@ -182,6 +211,10 @@ async function main(): Promise<void> {
       json(res, 404, { error: `no route ${req.method} ${url.pathname}` });
     } catch (err) {
       const message = err instanceof Error ? err.message : `non-Error value (${typeof err})`;
+      // ASVS V16.3.3 / V16.3.4: a refused body is a rejection; anything else here was not expected.
+      logSecurity(err instanceof BadRequest
+        ? requestEvent(req, { event: "rejected", status: err.status, reason: message })
+        : requestEvent(req, { event: "error", status: res.headersSent ? 200 : 500, reason: message }));
       if (res.destroyed) return;
       if (res.headersSent) {
         res.write(`event: error\ndata: ${JSON.stringify({ type: "error", message })}\n\n`);
@@ -194,7 +227,10 @@ async function main(): Promise<void> {
   });
   server.listen(port, "127.0.0.1", () => {
     const address = server.address();
-    if (address && typeof address !== "string") console.error(`[mcp-chat] http://127.0.0.1:${address.port}`);
+    if (address && typeof address !== "string") {
+      console.error(`[mcp-chat] http://127.0.0.1:${address.port}`);
+      console.error(`[mcp-chat] open http://${OWN_HOST}:${address.port}/ in a browser: a site of its own, apart from other local tools`);
+    }
   });
 
   const stop = async () => { await mcp.stop(); server.close(); process.exit(0); };
@@ -203,6 +239,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(`[mcp-chat] fatal: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`[mcp-chat] fatal: ${oneLine(err instanceof Error ? err.message : String(err))}`);
   process.exit(1);
 });

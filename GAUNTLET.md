@@ -112,13 +112,13 @@ Tags: **gate**, an automated check named in the cell (opened and read when tagge
 
 | Item | L | Requirement (short) | Tag | Evidence |
 |---|---|---|---|---|
-| V1.1.1 | 2 | Decode input to canonical form once, before validation | review | `readJson` decodes the body once as fatal UTF-8 after the size limit (`server/index.ts:80`); an asset path is `decodeURIComponent`-ed once and then checked for containment (`server/web.ts:81-84`; encoded `..` cases in `test/http-guard.test.ts` "serves the built assets ... nothing outside the web dir"). Double encoding is not tested. |
+| V1.1.1 | 2 | Decode input to canonical form once, before validation | review | `readJson` decodes the body once as fatal UTF-8 after the size limit (`server/index.ts:81`); an asset path is `decodeURIComponent`-ed once and then checked for containment (`server/web.ts:81-84`; encoded `..` cases in `test/http-guard.test.ts` "serves the built assets ... nothing outside the web dir"). Double encoding is not tested. |
 | V1.1.2 | 2 | Output encoding is the last step before the interpreter | **gate** | The front end renders through React elements only: `npm run lint` (eslint-plugin-no-unsanitized, in CI) and `test/markdown.test.tsx` "RED LEG: no HTML path — angle brackets and a script tag stay text ...". |
 | V1.2.1 | 1 | Context-correct output encoding for HTTP, HTML, XML | **gate** | `test/markdown.test.tsx` "RED LEG: no HTML path ..." (`<script>` stays `&lt;script&gt;`) and `test/web.test.tsx` "leaves an unbalanced marker alone and never opens an HTML path"; header values are constants. |
 | V1.2.2 | 1 | Encode untrusted data in built URLs; only safe URL schemes | **gate** | `test/markdown.test.tsx` "RED LEG: no HTML path ... a link never becomes an anchor to javascript:" and "WEB-4: data:, vbscript: and protocol-relative links never become anchors"; links are http(s) only (`web/src/markdown.tsx`). |
-| V1.2.3 | 1 | Encode when building JavaScript or JSON | review | Every SSE frame and JSON body is `JSON.stringify` (`server/index.ts:110`, `:171`), so model or tool text cannot break a frame; `test/stream.test.ts` "browser SSE boundary" covers parsing, not this encoding. |
+| V1.2.3 | 1 | Encode when building JavaScript or JSON | review | Every SSE frame and JSON body is `JSON.stringify` (`server/index.ts:131`, `:200`), so model or tool text cannot break a frame; `test/stream.test.ts` "browser SSE boundary" covers parsing, not this encoding. |
 | V1.2.4 | 1 | Parameterized database queries | N/A: no database | Traces are JSONL files; nothing else persists. |
-| V1.2.5 | 1 | No OS command injection | review | MCP servers start from the operator's config file (command and argument array, no shell, `server/mcp.ts:67`); no request or model output reaches a command line. |
+| V1.2.5 | 1 | No OS command injection | review | MCP servers start from the operator's config file (command and argument array, no shell, `server/mcp.ts:74`); no request or model output reaches a command line. |
 | V1.2.6 | 2 | No LDAP injection | N/A: no LDAP |  |
 | V1.2.7 | 2 | No XPath injection | N/A: no XPath |  |
 | V1.2.8 | 2 | LaTeX processors locked down | N/A: no LaTeX |  |
@@ -132,10 +132,10 @@ Tags: **gate**, an automated check named in the cell (opened and read when tagge
 | V1.3.7 | 2 | No templates built from untrusted input | N/A: no template engine |  |
 | V1.3.8 | 2 | No JNDI injection | N/A: no JNDI (Node.js) |  |
 | V1.3.9 | 2 | Sanitize data sent to memcache | N/A: no memcache |  |
-| V1.3.10 | 2 | Sanitize format strings | review | `console.error` gets template strings with no further arguments, so a `%` in a server's error text is printed, not substituted (`server/index.ts:117`). |
+| V1.3.10 | 2 | Sanitize format strings | review | Failed-server status lines and fatal errors are escaped to one line (`statusLine`, `oneLine` in `server/log.ts`); other `console.error` calls print the runtime's own text. |
 | V1.3.11 | 2 | No SMTP/IMAP injection | N/A: sends no mail |  |
 | V1.4.1 | 2 | Memory-safe strings and copies | N/A: memory-safe runtime | TypeScript on Node.js; no native code. |
-| V1.4.2 | 2 | Prevent integer overflow | review | Bounds are explicit: 200 messages, 32,000 characters each (`server/api.ts`), 8 MiB body (`server/index.ts:79`), tools/list pagination capped at 100 pages (`server/mcp.ts:91`). |
+| V1.4.2 | 2 | Prevent integer overflow | review | Bounds are explicit: 200 messages, 32,000 characters each (`server/api.ts`), 8 MiB body (`server/index.ts:80`), tools/list pagination capped at 100 pages (`server/mcp.ts:98`). |
 | V1.4.3 | 2 | Release memory; no dangling pointers | N/A: memory-safe runtime | Garbage-collected. |
 | V1.5.1 | 1 | XML parsers: no external entities (XXE) | N/A: parses no XML |  |
 | V1.5.2 | 2 | Safe deserialization of untrusted data | **gate** | Only `JSON.parse`, then shape checks: `test/api.test.ts` "RED LEG: a client-supplied tool message is refused ...", "drops extra keys rather than forwarding them", "refuses an empty list, a missing key, a non-object body ...". |
@@ -153,13 +153,13 @@ Tags: **gate**, an automated check named in the cell (opened and read when tagge
 | V3.4.1 | 1 | HSTS on all responses, max-age >= 1 year | N/A: single-user local tool | Served over plain HTTP on 127.0.0.1 only; HSTS applies to HTTPS hosts and browsers ignore it on HTTP. |
 | V3.4.2 | 1 | CORS Allow-Origin fixed or allowlisted | review | No `Access-Control-Allow-*` header is sent (grep 2026-11-28); a foreign `Origin` is refused 403 (`test/http-guard.test.ts` WEB-3). The absence of the header is not asserted. |
 | V3.4.3 | 2 | CSP with object-src/base-uri 'none' and nonces or allowlist | **gate** | `test/http-guard.test.ts` "RED LEG: a fresh nonce per response, on every script tag, strict-dynamic, no policy may be created": nonce, `object-src 'none'`, `base-uri 'none'`, no `'unsafe-inline'`. The Vite dev page: `test/vite-dev-csp.test.ts`. |
-| V3.4.4 | 2 | X-Content-Type-Options: nosniff on all responses | **gate** | `test/http-guard.test.ts` asserts `nosniff` on JSON, refusals, 404 and assets; it is set before routing (`server/index.ts:128`). |
+| V3.4.4 | 2 | X-Content-Type-Options: nosniff on all responses | **gate** | `test/http-guard.test.ts` asserts `nosniff` on JSON, refusals, 404 and assets; it is set before routing (`server/index.ts:152`). |
 | V3.4.5 | 2 | Referrer policy set | **gate** | `test/http-guard.test.ts` "RED LEG: nosniff, frame denial ..." asserts the referrer policy (`no-referrer`). |
 | V3.4.6 | 2 | CSP frame-ancestors on every response | **gate** | `test/http-guard.test.ts` asserts `frame-ancestors 'none'` on JSON, refusals, 404 and the page. |
 | V3.5.1 | 1 | Cross-origin requests to sensitive functions validated (CSRF) | **gate** | Host, Origin and `Sec-Fetch-Site` (`cross-site` and `same-site`) are checked before any route, whatever the method: `test/http-guard.test.ts` "RED LEG: a same-site request (another localhost port) is refused, not only cross-site". |
-| V3.5.2 | 1 | If relying on preflight, no non-preflighted call works | review | The app does not rely on preflight (V3.5.1 is the control); `POST /api/chat` also refuses a non-JSON content type with 415 (`server/index.ts:81`), untested. |
+| V3.5.2 | 1 | If relying on preflight, no non-preflighted call works | **gate** | The app does not rely on preflight (V3.5.1 is the control); a `text/plain` POST, the non-preflighted form, gets 415: `test/http-guard.test.ts` "RED LEG: a rejected chat body (wrong type, bad shape) writes a rejected line". |
 | V3.5.3 | 1 | Sensitive functions not on safe methods (or Sec-Fetch checked) | **gate** | The only state-changing route is `POST /api/chat`; GETs read, and a cross-site GET is refused (`test/http-guard.test.ts` WEB-3). `GET /api/trace/:id` returns conversation text and is covered by the same guard. |
-| V3.5.4 | 2 | Separate apps on separate hostnames | **GAP** | The runtime (8731), the Vite dev page (5173) and other local tools share 127.0.0.1 on different ports: separate origins, one site. Mitigated (no cookies; `same-site` refused), not met. |
+| V3.5.4 | 2 | Separate apps on separate hostnames | **gate** | fixed 2026-11-28, was GAP. The runtime answers as `mcp-chat.localhost`, a site of its own (each `*.localhost` name is its own site; 127.0.0.1 is one site for every local tool), and prints that URL at start; another `.localhost` name is refused. `test/http-guard.test.ts` "RED LEG: mcp-chat.localhost is served as the app, and a same-site page is still refused". 127.0.0.1 and localhost still answer, for clients and old bookmarks, and a page on another local tool is still refused as same-site. |
 | V3.5.5 | 2 | postMessage from untrusted origins discarded | N/A: no cross-document messaging | No `postMessage` or `message` listener. |
 | V3.7.1 | 2 | Only supported client-side technologies | **gate** | No plugins; `object-src 'none'` asserted in `test/http-guard.test.ts`. |
 | V3.7.2 | 2 | Off-site auto-redirects only to an allowlist | N/A: issues no redirects |  |
@@ -174,46 +174,46 @@ Tags: **gate**, an automated check named in the cell (opened and read when tagge
 | V13.2.3 | 2 | No default credentials for service auth | N/A: single-user local tool | No account or password of its own. |
 | V13.2.4 | 2 | Allowlist of external resources the app may reach | review | The config file is the allowlist of servers; one provider URL; only read-only tools run (`test/mcp.test.ts` "only read-only tools run"). |
 | V13.2.5 | 2 | Server-level allowlist for outbound requests | N/A: single-user local tool | No separate web server or firewall layer; V13.2.4 is the application-layer allowlist. |
-| V13.3.1 | 2 | Secrets in a secrets manager, not source or builds | **GAP** | The runtime reads `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` from its environment (`server/index.ts:54-60`); the key can be handed over from the OS credential store at launch (`test/mcp.test.ts` comment), but nothing makes the launch go that way and the README documents a plain environment variable. Close: a launcher that reads the store, documented, with a test. |
+| V13.3.1 | 2 | Secrets in a secrets manager, not source or builds | **gate** | fixed 2026-11-28, was GAP. `npm start` (`server/launch.ts`) reads the model keys from a secret store through `MCP_CHAT_SECRET_GET`, strips every secret-named variable the shell had, and refuses to start without a getter: `test/launch.test.ts` ("... never an environment fallback", "... only the store's keys go in", "npm start without a getter refuses to start, exit 2 ..."). `npm run dev:server` still reads the shell, for a clone with no store, and says so at start. |
 | V13.3.2 | 2 | Least-privilege access to secrets | **gate** | `test/mcp.test.ts` "passes the config's own env and none of the parent's secrets": no server inherits the model key. |
 | V13.4.1 | 1 | No source-control metadata exposed | **gate** | Only `index.html` and files under the build's `assets/` are served; `test/http-guard.test.ts` "serves the built assets ... nothing outside the web dir" (traversal and encoded traversal 404). |
 | V13.4.2 | 2 | Debug modes off in production | review | Debug surfaces are opt-in: traces off unless `MCP_CHAT_TRACE` is set (`server/trace.ts:20`), thinking off unless `MCP_CHAT_THINK=1`, the UI debug view a local toggle. A testbed, by design. |
 | V13.4.3 | 2 | No directory listings | **gate** | `test/http-guard.test.ts` "serves the built assets ..." requests `/assets/` and expects 404. `/api/traces` lists trace ids on purpose when tracing is on. |
-| V13.4.4 | 2 | HTTP TRACE not supported | review | Routes match method and path; `TRACE` reaches the JSON 404 (`server/index.ts:182`). Not tested. |
+| V13.4.4 | 2 | HTTP TRACE not supported | review | Routes match method and path; `TRACE` reaches the JSON 404 (`server/index.ts:211`). Not tested. |
 | V13.4.5 | 2 | Docs and monitoring endpoints not exposed unless intended | review | `/api/health`, `/api/tools`, `/api/traces` are the testbed's intended surface, behind the WEB-3 guard. |
 
 ### V14 Data Protection (9 items)
 
 | Item | L | Requirement (short) | Tag | Evidence |
 |---|---|---|---|---|
-| V14.1.1 | 2 | Sensitive data identified and classified | **GAP** | No data inventory. Close: classify the provider key, the conversation, tool results and trace files in this file. |
-| V14.1.2 | 2 | Protection requirements documented per level | **GAP** | Depends on V14.1.1. Close: one requirement line per class (storage, retention, logging, who may read). |
+| V14.1.1 | 2 | Sensitive data identified and classified | review | fixed 2026-11-28, was GAP. §8 Data classes: key, conversation, tool calls, traces, security events, debug toggle, each with a level. Review it when a class is added. |
+| V14.1.2 | 2 | Protection requirements documented per level | review | fixed 2026-11-28, was GAP. §8 Data classes, Requirements column (where, who receives it, caching, retention, logging). |
 | V14.2.1 | 1 | No sensitive data in URLs or query strings | **gate** | The key goes in a header: `test/providers.test.ts` "RED LEG: the request carries the key, version, system and tools ..." (`x-api-key`), `test/openai.test.ts` "RED LEG: the request carries the key, model, tools ..." (`authorization`). The chat is a POST body. |
 | V14.2.2 | 2 | Sensitive data not cached in server components | N/A: single-user local tool | No shared cache or proxy; nothing is cached server-side. |
 | V14.2.3 | 2 | Sensitive data not sent to trackers or third parties | **gate** | Page CSP `connect-src 'self'` asserted in `test/http-guard.test.ts`; no analytics. The conversation goes to the provider the operator configured, which is the app's purpose. |
-| V14.2.4 | 2 | Protection controls implemented as documented | **GAP** | Depends on V14.1.2. Close: check each class against its line, and turn the checkable ones into tests. |
+| V14.2.4 | 2 | Protection controls implemented as documented | review | fixed 2026-11-28, was GAP. §8 Data classes, Checked by column: each requirement names its test; trace retention (until deleted) and the grep over log writes are review-only. |
 | V14.3.1 | 1 | Authenticated data cleared from the client at session end | N/A: no authentication or sessions | The transcript is React state and is gone on reload. |
-| V14.3.2 | 2 | Cache-Control: no-store on sensitive responses | **GAP** | The page is `no-store` (asserted), but JSON responses set no `Cache-Control` (`json()`, `server/index.ts:108`), including `/api/trace/:id`, which returns conversation text; the stream is `no-cache`. Close: `no-store` in `SECURITY_HEADERS`, asserted in `test/http-guard.test.ts`. |
+| V14.3.2 | 2 | Cache-Control: no-store on sensitive responses | **gate** | fixed 2026-11-28, was GAP. `no-store` on every API response and the chat stream: `test/http-guard.test.ts` "RED LEG: no-store on JSON, refusals, 404, the trace routes and the chat stream". Built assets stay `no-cache`. |
 | V14.3.3 | 2 | No sensitive data in browser storage | review | localStorage holds one key, the debug toggle (`web/src/App.tsx:15`). |
 
 ### V16 Security Logging and Error Handling (16 items)
 
 | Item | L | Requirement (short) | Tag | Evidence |
 |---|---|---|---|---|
-| V16.1.1 | 2 | Logging inventory documented | **GAP** | Partly documented: stderr status lines (`server/index.ts`) and opt-in JSONL traces (`server/trace.ts` header, README). No single inventory with location, access and retention; traces are never pruned. Close: one table here. |
-| V16.2.1 | 2 | Log entries carry when, where, who, what | review | Trace files carry `startedAt` (ISO), model, message count and a per-frame offset `t`; the actor is always the local user. |
-| V16.2.2 | 2 | Synchronized clocks; UTC or explicit offset | review | One host clock; `toISOString()` (UTC) for trace timestamps. |
-| V16.2.3 | 2 | Logs go only to documented destinations | **GAP** | Depends on V16.1.1. Close: once the inventory exists, a review that every write goes to a listed destination. |
-| V16.2.4 | 2 | Logs readable by the log processor (common format) | review | Traces are JSONL, one JSON frame per line, read by `/api/trace/:id` and any JSON tool. |
-| V16.2.5 | 2 | Sensitive data logged per its protection level | **GAP** | Traces write unredacted conversation and tool results (documented in `server/trace.ts`), with no protection level to check that against. Close with V14.1.1, then redact or record the exception. |
+| V16.1.1 | 2 | Logging inventory documented | review | fixed 2026-11-28, was GAP. §8 Log inventory: each destination with its writer, events, format, access and retention. |
+| V16.2.1 | 2 | Log entries carry when, where, who, what | **gate** | Security lines carry `t`, `event`, `reason`, `status`, `method`, `path`, `origin`, `site`: `test/http-guard.test.ts` "RED LEG: a refused request writes one security line ...". Traces carry `startedAt` and per-frame `t`. The actor is always the local user. |
+| V16.2.2 | 2 | Synchronized clocks; UTC or explicit offset | **gate** | One host clock; `t` is `toISOString()` (UTC), asserted in `test/log.test.ts` "RED LEG: one JSON line with a UTC time ..." and in `test/http-guard.test.ts` (ISO `Z` pattern). |
+| V16.2.3 | 2 | Logs go only to documented destinations | review | fixed 2026-11-28, was GAP. §8 Log inventory names the only destinations, with the grep that shows nothing else writes; repeat it when a log line is added. |
+| V16.2.4 | 2 | Logs readable by the log processor (common format) | **gate** | Security events are one JSON object per line (`test/log.test.ts` "RED LEG: one JSON line ..."); traces are JSONL, read by `/api/trace/:id`. |
+| V16.2.5 | 2 | Sensitive data logged per its protection level | review | fixed 2026-11-28, was GAP. Traces are unredacted by design, recorded as the exception in §8 (trace row); security lines carry no message content, key or query string, and cut reasons at 500 characters (`test/log.test.ts`). |
 | V16.3.1 | 2 | Authentication operations logged | N/A: no authentication | Single-user local tool. |
-| V16.3.2 | 2 | Failed authorization attempts logged | **GAP** | Refusals (bad Host, foreign Origin, cross-site/same-site) return 403 unlogged (`server/index.ts:130-139`). Close: one stderr line per refusal. |
-| V16.3.3 | 2 | Documented security events and bypass attempts logged | **GAP** | Rejected bodies (400/413/415) and refused non-read-only tool calls are not logged outside a trace. Close with V16.3.2. |
-| V16.3.4 | 2 | Unexpected errors and control failures logged | **GAP** | Unexpected errors return 500 or an SSE error frame and reach a log only when tracing is on. Close: write them to stderr. |
-| V16.4.1 | 2 | Log data encoded against injection | **GAP** | Trace frames are JSON-encoded; the startup status line prints a server's error text as-is (`server/index.ts:117`), so a newline in it forges a line. Close: `JSON.stringify` the error. |
+| V16.3.2 | 2 | Failed authorization attempts logged | **gate** | fixed 2026-11-28, was GAP. Every 403 from the request guard writes a `refused` line: `test/http-guard.test.ts` "RED LEG: a refused request writes one security line with the reason, path and the browser's headers" (mutation removing the log call: red). |
+| V16.3.3 | 2 | Documented security events and bypass attempts logged | **gate** | fixed 2026-11-28, was GAP. Rejected bodies (400, 413, 415) and refused non-read-only calls are logged: `test/http-guard.test.ts` "RED LEG: a rejected chat body ...", `test/mcp.test.ts` "RED LEG: a refused call is logged as a security event ...". Model argument-validation failures go back to the model and into the trace, not the log (§8). |
+| V16.3.4 | 2 | Unexpected errors and control failures logged | review | fixed 2026-11-28, was GAP. The catch-all writes an `error` line before answering 500 or the stream's error frame (`server/index.ts:213-224`). No test provokes an unexpected error. |
+| V16.4.1 | 2 | Log data encoded against injection | **gate** | fixed 2026-11-28, was GAP. `test/log.test.ts` "RED LEG: a failed server's error text cannot forge a second line" and "RED LEG: a newline in a field stays inside the one line". |
 | V16.4.2 | 2 | Logs protected from access and modification | N/A: single-user local tool | Trace files sit in the user's own checkout under OS permissions; over HTTP they are behind the WEB-3 guard. |
 | V16.4.3 | 2 | Logs sent to a separate system | N/A: single-user local tool | No separate log system for a local single-user tool (named N/A in WEB-1). |
-| V16.5.1 | 2 | Generic error message, no internals | review | Errors reach the local user as `err.message`, never a stack (`server/index.ts:184-191`); provider errors include the provider's own message by design (`test/providers.test.ts` "a non-2xx status throws with the status and the API's message"). |
+| V16.5.1 | 2 | Generic error message, no internals | review | Errors reach the local user as `err.message`, never a stack (`server/index.ts:213-224`); provider errors include the provider's own message by design (`test/providers.test.ts` "a non-2xx status throws with the status and the API's message"). |
 | V16.5.2 | 2 | Secure operation when external resources fail | **gate** | `test/mcp.test.ts` "RED LEG: one server that cannot start does not take the others down ..."; `test/agent.test.ts` "RED LEG: a thrown tool becomes an isError result, not a crash", "a model that throws mid-turn ends with error + done(error)". |
 | V16.5.3 | 2 | Fail securely; no fail-open | **gate** | `test/agent.test.ts` "enforces conditional, format and draft-07 schemas and fails closed for unsupported or remote schemas", "RED LEG: an unknown tool name is refused before any call"; `test/mcp.test.ts` "refuses a tool that does not ..."; `test/stream.test.ts` "rejects a truncated last frame rather than silently dropping it". |
 
@@ -222,24 +222,39 @@ Tags: **gate**, an automated check named in the cell (opened and read when tagge
 | Chapter | Items (CSV) | Tagged | gate | review | N/A | GAP |
 |---|---|---|---|---|---|---|
 | V1 | 27 | 27 | 6 | 7 | 14 | 0 |
-| V3 | 19 | 19 | 9 | 2 | 7 | 1 |
-| V13 | 13 | 13 | 4 | 5 | 3 | 1 |
-| V14 | 9 | 9 | 2 | 1 | 2 | 4 |
-| V16 | 16 | 16 | 2 | 4 | 3 | 7 |
-| **all** | **84** | **84** | 23 | 19 | 29 | 13 |
+| V3 | 19 | 19 | 11 | 1 | 7 | 0 |
+| V13 | 13 | 13 | 5 | 5 | 3 | 0 |
+| V14 | 9 | 9 | 3 | 4 | 2 | 0 |
+| V16 | 16 | 16 | 8 | 5 | 3 | 0 |
+| **all** | **84** | **84** | 33 | 22 | 29 | 0 |
 
-### GAP list (13)
+### GAP list (0)
 
-- **V3.5.4** Separate apps on separate hostnames. The runtime (8731), the Vite dev page (5173) and other local tools share 127.0.0.1 on different ports: separate origins, one site. Mitigated (no cookies; `same-site` refused), not met.
-- **V13.3.1** Secrets in a secrets manager, not source or builds. The runtime reads `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` from its environment (`server/index.ts:54-60`); the key can be handed over from the OS credential store at launch (`test/mcp.test.ts` comment), but nothing makes the launch go that way and the README documents a plain environment variable. Close: a launcher that reads the store, documented, with a test.
-- **V14.1.1** Sensitive data identified and classified. No data inventory. Close: classify the provider key, the conversation, tool results and trace files in this file.
-- **V14.1.2** Protection requirements documented per level. Depends on V14.1.1. Close: one requirement line per class (storage, retention, logging, who may read).
-- **V14.2.4** Protection controls implemented as documented. Depends on V14.1.2. Close: check each class against its line, and turn the checkable ones into tests.
-- **V14.3.2** Cache-Control: no-store on sensitive responses. The page is `no-store` (asserted), but JSON responses set no `Cache-Control` (`json()`, `server/index.ts:108`), including `/api/trace/:id`, which returns conversation text; the stream is `no-cache`. Close: `no-store` in `SECURITY_HEADERS`, asserted in `test/http-guard.test.ts`.
-- **V16.1.1** Logging inventory documented. Partly documented: stderr status lines (`server/index.ts`) and opt-in JSONL traces (`server/trace.ts` header, README). No single inventory with location, access and retention; traces are never pruned. Close: one table here.
-- **V16.2.3** Logs go only to documented destinations. Depends on V16.1.1. Close: once the inventory exists, a review that every write goes to a listed destination.
-- **V16.2.5** Sensitive data logged per its protection level. Traces write unredacted conversation and tool results (documented in `server/trace.ts`), with no protection level to check that against. Close with V14.1.1, then redact or record the exception.
-- **V16.3.2** Failed authorization attempts logged. Refusals (bad Host, foreign Origin, cross-site/same-site) return 403 unlogged (`server/index.ts:130-139`). Close: one stderr line per refusal.
-- **V16.3.3** Documented security events and bypass attempts logged. Rejected bodies (400/413/415) and refused non-read-only tool calls are not logged outside a trace. Close with V16.3.2.
-- **V16.3.4** Unexpected errors and control failures logged. Unexpected errors return 500 or an SSE error frame and reach a log only when tracing is on. Close: write them to stderr.
-- **V16.4.1** Log data encoded against injection. Trace frames are JSON-encoded; the startup status line prints a server's error text as-is (`server/index.ts:117`), so a newline in it forges a line. Close: `JSON.stringify` the error.
+None open. The first tagging (2026-11-28, `4f8fa49`) found 13; all were fixed the same day, and each such cell says so.
+
+## §8 Data and logging inventory
+
+What this runtime holds and writes, for ASVS V14.1, V14.2.4, V16.1.1, V16.2.3 and V16.2.5 (§7). Written 2026-11-28 from the code; a change that adds a data class, a destination or a log line updates this section in the same commit.
+
+### Data classes
+
+| Class | Level | What | Where it lives | Requirements | Checked by |
+|---|---|---|---|---|---|
+| Model key | secret | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | a secret store, read by `npm start` (`server/launch.ts`); or the shell running `npm run dev:server`; runtime memory for the process's life | sent only to its own provider, in a header; never to the browser, an MCP server, a trace or a log line; a stale shell copy never reaches the runtime under `npm start` | `test/providers.test.ts`, `test/openai.test.ts` (header), `test/mcp.test.ts` "passes the config's own env and none of the parent's secrets", `test/launch.test.ts` |
+| Conversation | private | the user's messages, the model's answers and thinking | the browser's React state (gone on reload); the request in runtime memory; the configured provider, which is the app's purpose; trace files when tracing is on | not cached (`no-store`); no third party beyond the configured provider (page CSP `connect-src 'self'`); kept on disk only by opt-in tracing | `test/http-guard.test.ts` (no-store, CSP) |
+| Tool calls and results | private, may hold third-party records | arguments the model wrote, what the MCP server returned | as the conversation; arguments also go to the MCP server that runs the tool | as the conversation; only read-only tools run | `test/mcp.test.ts` "only read-only tools run" |
+| Trace files | private, **unredacted by design** | every frame of a request: conversation, tool results, thinking, usage | `traces/` (gitignored) or the directory in `MCP_CHAT_TRACE`, under the user's own file permissions | off unless `MCP_CHAT_TRACE` is set; served only through the WEB-3 guard with `no-store`; kept until the user deletes them, never pruned. Redaction would defeat the testbed (seeing exactly what the model saw), so the exception is recorded here instead (ASVS V16.2.5) | `test/log.test.ts` "traces are opt-in", `test/http-guard.test.ts` (no-store, guard) |
+| Security events | internal | refusals, rejected bodies, refused tool calls, unexpected errors (below) | stderr | no message content, no key, no query string; reasons cut at 500 characters | `test/log.test.ts`, `test/http-guard.test.ts` |
+| Debug toggle | public | `"0"` or `"1"` | browser localStorage | none | — |
+
+### Log inventory
+
+The runtime writes to these destinations and no other: a grep for `console.`, `stderr.write`, `stdout.write`, `appendFile` and `writeFile` under `server/` finds only these (2026-11-28; repeat it when a log line is added).
+
+| Destination | Written by | Events | Format | Access | Retention |
+|---|---|---|---|---|---|
+| stderr, status lines | `server/index.ts`, `server/launch.ts` | each MCP server up or failed (error text escaped), the model label, where the key came from, trace setting, listen address, fatal start errors | `[mcp-chat] …`, one line each | whoever reads the terminal or the file it is redirected to | the terminal's, or that file's |
+| stderr, security events | `server/log.ts`, from `server/index.ts` and `server/mcp.ts` | `refused` (Host, Origin, Sec-Fetch-Site), `rejected` (400, 413, 415), `tool_refused` (not read-only), `error` (anything unexpected, before or after the stream started) | one JSON object per line: `t` (UTC), `log: "security"`, `event`, `reason`, `status`, `method`, `path` (no query), `origin`, `site`, `tool` | as above | as above |
+| trace files | `server/trace.ts` | every frame of every `/api/chat` request, when `MCP_CHAT_TRACE` is set | JSONL: a `meta` line with `startedAt` (UTC), then one frame per line with `t` in ms from the start | the user's file permissions; `/api/traces`, `/api/trace/:id` behind the WEB-3 guard | until deleted |
+
+Not logged: successful requests (the trace is their record), model argument-validation failures (they come back to the model as an `isError` result and appear in the trace), and anything from an MCP server's own stderr, which is drained and dropped (`server/mcp.ts`).

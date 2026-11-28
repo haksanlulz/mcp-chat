@@ -15,6 +15,7 @@ const here = fileURLToPath(new URL("..", import.meta.url));
 let runtime: ChildProcess;
 let port = 0;
 let dir = "";
+let stderr = "";
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "mcp-chat-guard-"));
@@ -33,7 +34,6 @@ beforeAll(async () => {
     OLLAMA_BASE_URL: "http://127.0.0.1:9", MCP_CHAT_WEB_DIR: join(dir, "web") };
   delete env.ANTHROPIC_API_KEY; delete env.OPENAI_BASE_URL; delete env.MCP_CHAT_TRACE;
   runtime = spawn(process.execPath, ["--import", "tsx", join(here, "server", "index.ts")], { env, stdio: ["ignore", "ignore", "pipe"] });
-  let stderr = "";
   runtime.stderr!.on("data", (d) => { stderr += d; });
   for (let i = 0; i < 150 && !port; i++) {
     port = Number(stderr.match(/\[mcp-chat\] http:\/\/127\.0\.0\.1:(\d+)/)?.[1] ?? 0);
@@ -73,6 +73,66 @@ describe("WEB-3: forged requests are refused over HTTP", () => {
     expect((await raw("/api/health", { host })).statusCode, "a non-browser client").toBe(200);
   });
 });
+
+describe("WEB-1 (ASVS V3.5.4): the runtime has a hostname of its own", () => {
+  it("RED LEG: mcp-chat.localhost is served as the app, and a same-site page is still refused", async () => {
+    const host = `mcp-chat.localhost:${port}`;
+    expect((await raw("/api/health", { host, origin: `http://${host}`, "sec-fetch-site": "same-origin" })).statusCode, "own name").toBe(200);
+    expect((await raw("/api/health", { host, origin: `http://127.0.0.1:${port}` })).statusCode, "origin of another name").toBe(403);
+    expect((await raw("/api/health", { host: `other.localhost:${port}` })).statusCode, "another .localhost name").toBe(403);
+    expect(stderr).toContain(`http://mcp-chat.localhost:${port}/`);
+  });
+});
+
+/** The security event lines written to stderr so far (server/log.ts). */
+const events = () => stderr.split(/\r?\n/).filter((l) => l.startsWith("{")).map((l) => JSON.parse(l) as Record<string, unknown>);
+
+describe("WEB-1 (ASVS V16.3): refusals and rejected requests are logged", () => {
+  it("RED LEG: a refused request writes one security line with the reason, path and the browser's headers", async () => {
+    await raw("/api/tools?probe=refusal", { host: `127.0.0.1:${port}`, origin: "https://evil.example", "sec-fetch-site": "cross-site" });
+    await new Promise((r) => setTimeout(r, 200));
+    const e = events().find((x) => x.event === "refused" && x.origin === "https://evil.example" && x.site === "cross-site");
+    expect(e, stderr).toMatchObject({ log: "security", status: 403, method: "GET", path: "/api/tools", reason: "Same-origin access required.", site: "cross-site" });
+    expect(String(e!.t)).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+  });
+
+  it("RED LEG: a rejected chat body (wrong type, bad shape) writes a rejected line", async () => {
+    const host = `127.0.0.1:${port}`;
+    expect((await raw("/api/chat", { host, "content-type": "text/plain" }, "POST")).statusCode).toBe(415);
+    const shape = await post("/api/chat", host, { messages: [] });
+    expect(shape.statusCode).toBe(400);
+    await new Promise((r) => setTimeout(r, 200));
+    const rejected = events().filter((x) => x.event === "rejected" && x.path === "/api/chat").map((x) => x.status);
+    expect(rejected).toEqual(expect.arrayContaining([415, 400]));
+  });
+});
+
+describe("WEB-1 (ASVS V14.3.2): nothing the API returns is cached", () => {
+  it("RED LEG: no-store on JSON, refusals, 404, the trace routes and the chat stream", async () => {
+    const host = `127.0.0.1:${port}`;
+    for (const path of ["/api/health", "/api/tools", "/api/traces", "/api/trace/nope", "/nope"]) {
+      expect((await raw(path, { host })).headers["cache-control"], path).toBe("no-store");
+    }
+    expect((await raw("/api/tools", { host: "rebind.example" })).headers["cache-control"], "refusal").toBe("no-store");
+    const stream = await post("/api/chat", host, { messages: [{ role: "user", content: "hi" }] });
+    expect(String(stream.headers["content-type"])).toContain("text/event-stream");
+    expect(stream.headers["cache-control"], "stream").toBe("no-store");
+  });
+});
+
+function post(path: string, host: string, body: unknown): Promise<http.IncomingMessage & { body: string }> {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = http.request({ host: "127.0.0.1", port, path, method: "POST", headers: { host, "content-type": "application/json", "content-length": Buffer.byteLength(data) } }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => { text += d; });
+      res.on("end", () => resolve(Object.assign(res, { body: text })));
+    });
+    req.on("error", reject);
+    req.end(data);
+  });
+}
 
 describe("WEB-2: every response the runtime sends carries the headers", () => {
   it("RED LEG: nosniff, frame denial, a deny-all CSP, a referrer policy, COOP and Vary on JSON and on refusals", async () => {

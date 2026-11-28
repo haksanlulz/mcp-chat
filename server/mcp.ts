@@ -12,6 +12,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { ToolCall, ToolResult, ToolSpec } from "./agent.js";
+import { logSecurity, type SecurityEvent } from "./log.js";
 
 export type ServerConfig = {
   /** Short handle used as the tool-name prefix, e.g. "housing". [a-z0-9_-] only. */
@@ -49,6 +50,12 @@ type Live = { config: ServerConfig; client: Client; tools: ToolSpec[]; readOnlyT
 export class McpManager {
   private live = new Map<string, Live>();
   private failed = new Map<string, string>();
+  private log: (e: SecurityEvent) => void;
+
+  /** `log` receives security events (a refused call); the default writes them to stderr (server/log.ts). */
+  constructor(opts: { log?: (e: SecurityEvent) => void } = {}) {
+    this.log = opts.log ?? ((e) => logSecurity(e));
+  }
 
   /** Start every server; never throws for one bad server. */
   async start(configs: ServerConfig[], opts: { timeoutMs?: number } = {}): Promise<ServerStatus[]> {
@@ -119,6 +126,7 @@ export class McpManager {
     // Nothing here asks the person first, so only reading is allowed: a tool that declares itself read-only, or a
     // server the config vouches for. Anything else is refused before the server sees it.
     if (l.config.readOnly !== true && !l.readOnlyTools.has(parts.tool)) {
+      this.log({ event: "tool_refused", tool: call.name, reason: "the tool does not declare itself read-only and the config does not vouch for its server" });
       return {
         content: `${call.name} was not run: this app runs only read-only tools, and this tool does not declare itself read-only. ` +
           `If every tool on "${parts.server}" only reads, the person who runs this app can set "readOnly": true on that server in the config.`,

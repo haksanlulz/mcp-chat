@@ -37,7 +37,7 @@ npm run dev:server        # runtime on http://127.0.0.1:8731
 npm run dev:web           # UI on http://127.0.0.1:5173, proxies /api to the runtime
 ```
 
-Or build the UI once and let the runtime serve it: `npm run build:web`, then the runtime's own `http://127.0.0.1:8731/`. That page gets a fresh CSP nonce per load with `strict-dynamic`, and Trusted Types with no policy allowed, so no HTML string can reach a DOM sink. The Vite dev page gets the same CSP with one nonce per dev-server start; there, Trusted Types is report-only, because Vite's error overlay writes HTML. `MCP_CHAT_WEB_DIR` overrides `dist/web`.
+Or build the UI once and let the runtime serve it: `npm run build:web`, then the runtime's own `http://mcp-chat.localhost:8731/`. Browsers resolve any `*.localhost` name to this machine, and each name is a site of its own, while `127.0.0.1` is one site shared by every local tool whatever its port; `127.0.0.1` and `localhost` still answer. That page gets a fresh CSP nonce per load with `strict-dynamic`, and Trusted Types with no policy allowed, so no HTML string can reach a DOM sink. The Vite dev page gets the same CSP with one nonce per dev-server start; there, Trusted Types is report-only, because Vite's error overlay writes HTML. `MCP_CHAT_WEB_DIR` overrides `dist/web`.
 
 Model selection, by environment, first match wins:
 
@@ -49,7 +49,11 @@ Model selection, by environment, first match wins:
 
 So any model, as long as it sits behind one of those three wires and can call tools. A model without tool calling in its template gets the tools and can't use them; it'll just chat. The Ollama-native provider exists for its `think` field and per-frame timing. The same Ollama model over `OPENAI_BASE_URL=http://127.0.0.1:11434/v1` gave the same answer to the same question (123 open violations at 1520 Sedgwick, 16 A / 35 B / 72 C), which is the check that the two wires agree.
 
-`MCP_CHAT_PORT` (8731) and `MCP_CHAT_CONFIG` (path) override the defaults. The runtime binds 127.0.0.1, checks the request host and browser origin, and accepts JSON chat bodies up to 8 MiB. Stop cancels pending local work and asks the provider or MCP server to cancel ongoing work; external work already performed cannot be rolled back.
+### Keys
+
+`npm start` reads `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from a secret store instead of the shell. Set `MCP_CHAT_SECRET_GET` to the store's read command as a JSON array; the key name is appended and the value read from stdout, for example `MCP_CHAT_SECRET_GET='["secret-tool","lookup","service"]'` or a keyring script. The runtime then gets the shell's environment minus every secret-named variable, plus only what the store returned; a key the store lacks is absent, never taken from the shell. Without `MCP_CHAT_SECRET_GET`, `npm start` refuses to start. `npm run dev:server` reads keys from the shell, for a clone with no store, and says so in its first lines.
+
+`MCP_CHAT_PORT` (8731) and `MCP_CHAT_CONFIG` (path) override the defaults. The runtime binds 127.0.0.1, checks the request host and browser origin, and accepts JSON chat bodies up to 8 MiB. Every refused request, rejected body, refused tool call and unexpected error is written to stderr as one JSON line (`"log":"security"`); `GAUNTLET.md` §8 lists everything the runtime logs and holds. Stop cancels pending local work and asks the provider or MCP server to cancel ongoing work; external work already performed cannot be rolled back.
 
 ## Config
 
@@ -96,6 +100,9 @@ npm run smoke     # starts the real runtime against a fixture MCP server, hits e
 | `test/providers.test.ts` | Ollama NDJSON + Anthropic SSE parsing, transcript mapping, error frames, non-2xx; thinking on both providers, the Ollama think probe, usage/timing | `fetch` stubbed with chunked streams |
 | `test/mcp.test.ts` | server start/fail isolation, qualified names, `isError` pass-through | a **real MCP server over stdio** (`test/fixtures/echo-server.ts`) |
 | `test/api.test.ts` | `/api/chat` body: roles, caps, extra keys | pure |
+| `test/http-guard.test.ts` | request guard, security headers, `no-store`, the page's nonce CSP, the `mcp-chat.localhost` name, security log lines | the **real runtime over HTTP** |
+| `test/log.test.ts` | security lines are one JSON line in UTC; server text cannot forge a log line; traces are opt-in | pure |
+| `test/launch.test.ts` | `npm start`: keys from the store only, secret-named shell variables stripped, refuses without a getter | pure, and the launcher as a process |
 | `test/web.test.tsx` | error card, cap note, no result-as-text, SSE reassembly, bold; debug view: thinking block, turn strips, prompt disclosure | `react-dom/server`, no browser |
 | `test/markdown.test.tsx` | the markdown subset: headings, nested lists, bold/italic nesting, code, links + bare-URL autolink, no HTML path, `javascript:` refused | `react-dom/server`, no browser |
 

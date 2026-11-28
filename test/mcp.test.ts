@@ -5,6 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { McpManager, qualify, split } from "../server/mcp";
+import type { SecurityEvent } from "../server/log";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/echo-server.ts", import.meta.url));
 // node --import tsx <file>: no npx wrapper, so stop() reaps the actual server.
@@ -78,7 +79,8 @@ describe("McpManager over stdio", () => {
 // model and a tool that changes things. A call now runs only when the tool says it is read-only, or the
 // person who wrote the config vouched for the whole server with "readOnly": true. Anything else is refused.
 describe("only read-only tools run", () => {
-  const unvouched = new McpManager(), vouched = new McpManager();
+  const logged: SecurityEvent[] = [];
+  const unvouched = new McpManager({ log: (e) => logged.push(e) }), vouched = new McpManager();
   beforeAll(async () => {
     await Promise.all([unvouched.start([fixture("rw")], { timeoutMs: 30_000 }), vouched.start([{ ...fixture("ok"), readOnly: true }], { timeoutMs: 30_000 })]);
   }, 60_000);
@@ -96,6 +98,10 @@ describe("only read-only tools run", () => {
     expect(r.content).toMatch(/not run/);
     expect(r.content).toMatch(/readOnly/);
     expect(r.content).not.toContain("fixture upstream 503");
+  });
+
+  it("RED LEG: a refused call is logged as a security event (ASVS V16.3.3); a run call is not", () => {
+    expect(logged).toEqual([{ event: "tool_refused", tool: "rw__fail", reason: "the tool does not declare itself read-only and the config does not vouch for its server" }]);
   });
 
   it("runs it when the config vouches for the server", async () => {
