@@ -6,7 +6,7 @@
 
 `2ca7372` every runtime response carries the WEB-2 headers and a same-site request is refused (WEB-3). `802f004` the runtime serves the built page itself (`npm run build:web`, then `http://127.0.0.1:8731/`): a fresh nonce CSP per load with `strict-dynamic`, Trusted Types with no policy, and assets confined to `dist/web/assets` (a version without the containment check served an outside file through `..%2f`, test red). `46a8cfd` the Vite dev page gets the same CSP with one nonce per dev-server start (`html.cspNonce`); Trusted Types is report-only there because Vite's error overlay writes innerHTML. The build has no fixed nonce (test). Live: both pages rendered with a clean console and eval blocked. All pushed 2026-11-27 (`2ca7372..9b1ae08`).
 
-`ad2e863` (not pushed): `46a8cfd`'s dev CSP leaked into `vite preview` (it reuses `server.headers`) and blanked the preview page, now serve-only (test red first); an axe run at WCAG 2.2 AAA, light and dark, then found `--muted` under 7:1, no h1 and the composer outside a landmark, all fixed (0 violations). Populated chat states not audited.
+`ad2e863` (pushed 2026-11-27, `eff2f55..42e3895`): `46a8cfd`'s dev CSP leaked into `vite preview` (it reuses `server.headers`) and blanked the preview page, now serve-only (test red first); an axe run at WCAG 2.2 AAA, light and dark, then found `--muted` under 7:1, no h1 and the composer outside a landmark, all fixed (0 violations). Populated chat states not audited.
 
 verify: `npx vitest run && npm run typecheck` — 145 tests.
 
