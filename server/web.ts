@@ -6,8 +6,8 @@
  *   GET /, /index.html   index.html, every <script> tag given this response's nonce
  *   GET /assets/<file>   a file under <webDir>/assets with a known type; anything else is not served
  *
- * The Vite dev server (npm run dev:web) still serves its own page for development; its HMR needs inline
- * script, so it does not get this CSP.
+ * The Vite dev server (npm run dev:web) serves its own page for development, under devPageCsp below (set in
+ * vite.config.ts): the same policy, with a per-start nonce and Trusted Types report-only.
  */
 import { randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
@@ -38,6 +38,25 @@ export function pageCsp(nonce: string): string {
     "require-trusted-types-for 'script'",
     "trusted-types 'none'",
   ].join("; ");
+}
+
+/**
+ * The Vite dev server's page (npm run dev:web), from vite.config.ts. The same policy with two dev-only changes:
+ * Vite injects CSS as <style> elements, so styles take the nonce too; and Trusted Types is split off into a
+ * report-only header, because Vite's error overlay writes innerHTML. The nonce is per dev-server start (Vite
+ * stamps one value into every page), never per response; the built page keeps pageCsp.
+ */
+export function devPageCsp(nonce: string): { enforce: string; reportOnly: string } {
+  const parts = pageCsp(nonce)
+    .split("; ")
+    .map((p) => (p === "style-src 'self'" ? `style-src 'self' 'nonce-${nonce}'` : p));
+  const tt = (p: string) => p.startsWith("require-trusted-types-for") || p.startsWith("trusted-types");
+  return { enforce: parts.filter((p) => !tt(p)).join("; "), reportOnly: parts.filter(tt).join("; ") };
+}
+
+/** A fresh nonce: 16 random bytes, base64url (22 characters). */
+export function newNonce(): string {
+  return randomBytes(16).toString("base64url");
 }
 
 /** Serve the page or one of its assets; false when the request is not for either (the caller 404s). */

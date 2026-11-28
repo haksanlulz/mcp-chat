@@ -37,7 +37,7 @@ npm run dev:server        # runtime on http://127.0.0.1:8731
 npm run dev:web           # UI on http://127.0.0.1:5173, proxies /api to the runtime
 ```
 
-Or build the UI once and let the runtime serve it: `npm run build:web`, then the runtime's own `http://127.0.0.1:8731/`. That page gets a fresh CSP nonce per load with `strict-dynamic`, and Trusted Types with no policy allowed, so no HTML string can reach a DOM sink. The Vite dev page does not get either, because its hot reload needs inline script. `MCP_CHAT_WEB_DIR` overrides `dist/web`.
+Or build the UI once and let the runtime serve it: `npm run build:web`, then the runtime's own `http://127.0.0.1:8731/`. That page gets a fresh CSP nonce per load with `strict-dynamic`, and Trusted Types with no policy allowed, so no HTML string can reach a DOM sink. The Vite dev page gets the same CSP with one nonce per dev-server start; there, Trusted Types is report-only, because Vite's error overlay writes HTML. `MCP_CHAT_WEB_DIR` overrides `dist/web`.
 
 Model selection, by environment, first match wins:
 
