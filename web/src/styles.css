@@ -1,11 +1,14 @@
 :root {
   color-scheme: light dark;
-  --bg: #fafafa; --fg: #1a1a1a; --muted: #555; --line: #ddd;
-  --user: #e8eefc; --tool: #f3f3f3; --ok: #2f7d32; --err: #b3261e; --warn: #8a6d00;
+  /* Every text colour clears 7:1 (WCAG 2.2 AAA, 1.4.6) on --bg, --tool and --user in its theme; measured by an
+     axe AAA run over a populated turn, 2026-11-27. */
+  --bg: #fafafa; --fg: #1a1a1a; --muted: #4a4a4a; --line: #ddd;
+  --user: #e8eefc; --tool: #f3f3f3; --ok: #1e5e22; --err: #8f1d17; --warn: #5f4b00;
   font: 14px/1.45 system-ui, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #111; --fg: #eee; --muted: #a3a3a3; --line: #333; --user: #1d2740; --tool: #1b1b1b; }
+  :root { --bg: #111; --fg: #eee; --muted: #b0b0b0; --line: #333; --user: #1d2740; --tool: #1b1b1b;
+          --ok: #7fd483; --err: #ff9a8f; --warn: #f0c75e; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); }
@@ -15,7 +18,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); }
 .bar__title { font-size: inherit; font-weight: 700; margin: 0; }
 .bar__model { color: var(--muted); font-family: monospace; font-size: 12px; }
 .bar__servers { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
-.bar__reset { font: inherit; }
+.bar__reset { font: inherit; background: var(--tool); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; }
 .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
 .pill--up { border-color: var(--ok); }
 .pill--failed { border-color: var(--err); color: var(--err); }
