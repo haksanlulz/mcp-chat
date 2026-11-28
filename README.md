@@ -47,6 +47,8 @@ Model selection, by environment, first match wins:
 | `ANTHROPIC_API_KEY` set | Anthropic Messages API; `ANTHROPIC_MODEL` (default `claude-sonnet-5`) |
 | otherwise | Ollama's native API at `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`); `OLLAMA_MODEL` (default `qwen3-coder:30b`) |
 
+The provider address is checked at startup, before any request: https to api.openai.com, openrouter.ai or api.anthropic.com, plain http only to this machine or the tailnet (100.64.0.0/10), no other scheme and no user or password in the address. To use another hosted provider, name its host in `MCP_CHAT_PROVIDER_HOSTS` (comma-separated).
+
 So any model, as long as it sits behind one of those three wires and can call tools. A model without tool calling in its template gets the tools and can't use them; it'll just chat. The Ollama-native provider exists for its `think` field and per-frame timing. The same Ollama model over `OPENAI_BASE_URL=http://127.0.0.1:11434/v1` gave the same answer to the same question (123 open violations at 1520 Sedgwick, 16 A / 35 B / 72 C), which is the check that the two wires agree.
 
 ### Keys

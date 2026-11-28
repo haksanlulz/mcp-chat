@@ -8,6 +8,7 @@ Not yet released (`package.json` is at 0.1.0). Changes before 2026-11-27 are in 
 
 ### Added
 
+- The model provider's address is checked at startup against an allowlist (`server/egress.ts`): known hosted providers over https, local and tailnet servers over http, more hosts through `MCP_CHAT_PROVIDER_HOSTS`.
 - The runtime serves the built page itself (`npm run build:web`, then the runtime's own address): a fresh nonce CSP per load with `strict-dynamic`, Trusted Types with no policy allowed, and assets confined to `dist/web/assets`.
 - The Vite dev page gets the same CSP with one nonce per dev-server start; Trusted Types is report-only there.
 - `npm start` reads the model keys from a secret store (`MCP_CHAT_SECRET_GET`) and strips secret-named variables from the shell's environment before starting the runtime.

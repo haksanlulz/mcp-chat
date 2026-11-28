@@ -35,6 +35,7 @@ import { serveWeb } from "./web.js";
 import { OllamaModel } from "./providers/ollama.js";
 import { AnthropicModel } from "./providers/anthropic.js";
 import { OpenAIModel } from "./providers/openai.js";
+import { checkProviderUrl } from "./egress.js";
 
 type Config = { servers: ServerConfig[]; system?: string; maxIterations?: number };
 
@@ -49,7 +50,7 @@ function loadConfig(): Config {
 }
 
 function pickModel(cfg: Config): { model: Model; label: string } {
-  const oai = process.env.OPENAI_BASE_URL;
+  const oai = process.env.OPENAI_BASE_URL && checkProviderUrl(process.env.OPENAI_BASE_URL, "OPENAI_BASE_URL");
   if (oai) {
     const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
     const apiKey = process.env.OPENAI_API_KEY;
@@ -68,7 +69,7 @@ function pickModel(cfg: Config): { model: Model; label: string } {
     };
   }
   const model = process.env.OLLAMA_MODEL ?? "qwen3-coder:30b";
-  const baseUrl = process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
+  const baseUrl = checkProviderUrl(process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434", "OLLAMA_BASE_URL");
   const think = process.env.MCP_CHAT_THINK === "1";
   return { model: new OllamaModel({ model, baseUrl, think, ...(cfg.system ? { system: cfg.system } : {}) }), label: `ollama:${model}${think ? " (think)" : ""}` };
 }
