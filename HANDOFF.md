@@ -2,6 +2,12 @@
 
 ## Last Updated
 
+### 2026-11-27 — App standard WEB-2/3: response headers, nonce CSP on the built and dev pages (Opus 5.5, root cwd)
+
+`2ca7372` every runtime response carries the WEB-2 headers and a same-site request is refused (WEB-3). `802f004` the runtime serves the built page itself (`npm run build:web`, then `http://127.0.0.1:8731/`): a fresh nonce CSP per load with `strict-dynamic`, Trusted Types with no policy, and assets confined to `dist/web/assets` (a version without the containment check served an outside file through `..%2f`, test red). `46a8cfd` the Vite dev page gets the same CSP with one nonce per dev-server start (`html.cspNonce`); Trusted Types is report-only there because Vite's error overlay writes innerHTML. The build has no fixed nonce (test). Live: both pages rendered with a clean console and eval blocked. `802f004` and `46a8cfd` are local, two ahead of `origin/main`; not pushed (operator's call).
+
+verify: `npx vitest run && npm run typecheck` — 145 tests.
+
 ### 2026-11-25 to 26 — MCP security audit: read-only calls only, pinned example config, link hosts shown (Opus 5.5, root cwd)
 
 `44a0193` a tool call runs only when the tool declares `readOnlyHint: true` or its server has `"readOnly": true` in the config; write tools do not run. `ec22488` the example config pins each `npx -y` package to its published version, and fixes `"readOnly"` sitting inside `env`. `b66c613` a `[text](https://...)` link whose text does not name its real host shows the host beside it. `f51dbf7` a started MCP server never inherits the runtime's secrets (test). All pushed. By design, not changed: the OpenAI key follows `OPENAI_BASE_URL` (both are the operator's environment); traces are off unless `MCP_CHAT_TRACE` is set and never deleted (the operator's call). Audit record: the operator's local MCP security audit report, rows 10, 12, 25.
