@@ -38,6 +38,13 @@ describe("Markdown", () => {
     expect(out).toContain("click");
   });
 
+  it("WEB-4: data:, vbscript: and protocol-relative links never become anchors", () => {
+    const out = html("[a](data:text/html,<b>x</b>) [b](vbscript:msgbox) [c](//evil.example/x) [d](DATA:text/plain,hi)");
+    expect(out).not.toMatch(/href="(data|vbscript|DATA):/);
+    expect(out).not.toContain('href="//');
+    for (const t of ["a", "b", "c", "d"]) expect(out).toContain(t);
+  });
+
   // MCP security audit 2026-11-25 (lower-severity): a link's text can name one site while it points at
   // another, which is how an injected instruction smuggles data out in a query string. The real host is
   // shown beside any link whose text does not already show it.
