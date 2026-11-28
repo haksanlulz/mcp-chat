@@ -6,11 +6,13 @@ import { devPageCsp, newNonce } from "./server/web";
 // Front end lives in web/; the agent runtime in server/ is run with tsx, not
 // bundled. Vitest reads this file too, so the test block sits here rather than
 // in a second config that could drift from it.
-export default defineConfig(({ command }) => {
+export default defineConfig(({ command, isPreview }) => {
   // App standard WEB-2 on the dev page (test/vite-dev-csp.test.ts): one nonce per dev-server start,
   // stamped by Vite into every script and style it serves. Never set for a build: the runtime gives the
-  // built page a fresh nonce per response, and a fixed one baked into dist/web would defeat that.
-  const nonce = command === "serve" ? newNonce() : undefined;
+  // built page a fresh nonce per response, and a fixed one baked into dist/web would defeat that. Not for
+  // `vite preview` either: it reuses server.headers, and the built page it serves carries no nonce, so the
+  // dev CSP blocked every script there (found by the WEB-5 axe run, 2026-11-27).
+  const nonce = command === "serve" && !isPreview ? newNonce() : undefined;
   const csp = nonce ? devPageCsp(nonce) : undefined;
   return {
     root: "web",

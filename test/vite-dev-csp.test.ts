@@ -37,6 +37,13 @@ describe("vite dev page CSP", () => {
     expect(a).not.toBe(b);
   });
 
+  it("preview: no dev CSP (vite preview reuses server.headers, and the built page carries no nonce)", () => {
+    const c = resolve({ command: "serve", mode: "production", isPreview: true } as any);
+    expect(c.html?.cspNonce).toBeUndefined();
+    expect(c.server?.headers?.["Content-Security-Policy"]).toBeUndefined();
+    expect(c.preview?.headers?.["Content-Security-Policy"]).toBeUndefined();
+  });
+
   it("build: no nonce baked into dist/web", () => {
     const c = resolve({ command: "build", mode: "production" });
     expect(c.html?.cspNonce).toBeUndefined();

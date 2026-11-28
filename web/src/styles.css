@@ -1,17 +1,18 @@
 :root {
   color-scheme: light dark;
-  --bg: #fafafa; --fg: #1a1a1a; --muted: #666; --line: #ddd;
+  --bg: #fafafa; --fg: #1a1a1a; --muted: #555; --line: #ddd;
   --user: #e8eefc; --tool: #f3f3f3; --ok: #2f7d32; --err: #b3261e; --warn: #8a6d00;
   font: 14px/1.45 system-ui, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #111; --fg: #eee; --muted: #999; --line: #333; --user: #1d2740; --tool: #1b1b1b; }
+  :root { --bg: #111; --fg: #eee; --muted: #a3a3a3; --line: #333; --user: #1d2740; --tool: #1b1b1b; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); }
 .app { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; max-width: 900px; margin: 0 auto; padding-inline: 16px; }
 
 .bar { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.bar__title { font-size: inherit; font-weight: 700; margin: 0; }
 .bar__model { color: var(--muted); font-family: monospace; font-size: 12px; }
 .bar__servers { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 .bar__reset { font: inherit; }

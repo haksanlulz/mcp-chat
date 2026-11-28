@@ -36,7 +36,7 @@ export function App() {
   return (
     <div className="app">
       <header className="bar">
-        <strong>mcp-chat</strong>
+        <h1 className="bar__title">mcp-chat</h1>
         <span className="bar__model">{health ? health.model : healthErr ? `runtime unreachable: ${healthErr}` : "…"}</span>
         <span className="bar__servers">
           {health?.servers.map((s) => (
@@ -54,7 +54,7 @@ export function App() {
         <div ref={endRef} />
       </main>
 
-      <form className="composer" onSubmit={onSubmit}>
+      <form className="composer" onSubmit={onSubmit} aria-label="Message">
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
