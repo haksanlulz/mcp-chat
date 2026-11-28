@@ -4,7 +4,7 @@
 
 ### 2026-11-27 — App standard WEB-2/3: response headers, nonce CSP on the built and dev pages (Opus 5.5, root cwd)
 
-`2ca7372` every runtime response carries the WEB-2 headers and a same-site request is refused (WEB-3). `802f004` the runtime serves the built page itself (`npm run build:web`, then `http://127.0.0.1:8731/`): a fresh nonce CSP per load with `strict-dynamic`, Trusted Types with no policy, and assets confined to `dist/web/assets` (a version without the containment check served an outside file through `..%2f`, test red). `46a8cfd` the Vite dev page gets the same CSP with one nonce per dev-server start (`html.cspNonce`); Trusted Types is report-only there because Vite's error overlay writes innerHTML. The build has no fixed nonce (test). Live: both pages rendered with a clean console and eval blocked. `802f004` and `46a8cfd` are local, two ahead of `origin/main`; not pushed (operator's call).
+`2ca7372` every runtime response carries the WEB-2 headers and a same-site request is refused (WEB-3). `802f004` the runtime serves the built page itself (`npm run build:web`, then `http://127.0.0.1:8731/`): a fresh nonce CSP per load with `strict-dynamic`, Trusted Types with no policy, and assets confined to `dist/web/assets` (a version without the containment check served an outside file through `..%2f`, test red). `46a8cfd` the Vite dev page gets the same CSP with one nonce per dev-server start (`html.cspNonce`); Trusted Types is report-only there because Vite's error overlay writes innerHTML. The build has no fixed nonce (test). Live: both pages rendered with a clean console and eval blocked. All pushed 2026-11-27 (`2ca7372..9b1ae08`).
 
 verify: `npx vitest run && npm run typecheck` — 145 tests.
 
